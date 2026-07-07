@@ -1,0 +1,41 @@
+{
+  "score_global": 3.4,
+  "total_analyses": 5,
+  "lignes_phares": [
+    "60% des avis sont négatifs — situation nécessitant une action immédiate",
+    "Les délais de livraison sont le problème le plus cité (35% des plaintes)",
+    "Le SAV est perçu comme injoignable dans 2 avis sur 3 négatifs",
+    "Aucune réponse publiée sur les 3 derniers avis négatifs",
+    "Tendance des 7 derniers jours en baisse (2.7 étoiles de moyenne)"
+  ],
+  "top_problemes": [
+    {
+      "probleme": "Délais de livraison",
+      "frequence": "35%",
+      "severite": "haute"
+    },
+    {
+      "probleme": "SAV injoignable",
+      "frequence": "30%",
+      "severite": "haute"
+    },
+    {
+      "probleme": "Qualité produit",
+      "frequence": "25%",
+      "severite": "haute"
+    },
+    {
+      "probleme": "Prix",
+      "frequence": "10%",
+      "severite": "moyenne"
+    }
+  ],
+  "recommandations": [
+    "Répondre immédiatement aux 3 avis négatifs non traités",
+    "Mettre en place un process SAV avec délai de réponse garanti sous 24h",
+    "Contacter directement Marc Leblanc (1 étoile) pour résolution en privé",
+    "Lancer une campagne de collecte d'avis auprès des clients satisfaits"
+  ],
+  "quick_win": "Publier 4 réponses aux avis en attente cette semaine",
+  "generated_at": "2026-07-01T10:00:00Z"
+}
