@@ -128,22 +128,15 @@ def get_session_id(user_id: str, context: str) -> str:
     return f"{user_id}_{context}"
 
 def load_history(user_id: str, context: str, conv_id: str = None) -> list:
-    """Charge l'historique d'une conversation depuis SQLite."""
+    """Charge l'historique d'une conversation spécifique.
+    Sans conv_id → retourne liste vide (nouvelle conversation propre).
+    """
+    if not conv_id:
+        return []
     with get_db() as conn:
-        if conv_id:
-            cid = conv_id
-        else:
-            # Charger la conversation active la plus récente
-            row = conn.execute(
-                "SELECT conv_id FROM conversations WHERE user_id=? AND context=? ORDER BY updated_at DESC LIMIT 1",
-                (user_id, context)
-            ).fetchone()
-            if not row:
-                return []
-            cid = row["conv_id"]
         rows = conn.execute(
             "SELECT role, content FROM messages WHERE conv_id=? ORDER BY id",
-            (cid,)
+            (conv_id,)
         ).fetchall()
     return [{"role": r["role"], "content": r["content"]} for r in rows]
 
@@ -169,41 +162,50 @@ def get_active_conv_id(user_id: str, context: str) -> str:
     return row["conv_id"] if row else None
 
 def save_messages(user_id: str, context: str, messages: list, conv_id: str = None):
-    """Sauvegarde les nouveaux messages dans la conversation active."""
+    """Sauvegarde les messages dans une conversation.
+    Si conv_id fourni → ajoute dans cette conversation.
+    Si conv_id absent → crée TOUJOURS une nouvelle conversation (jamais de fusion avec l'existant).
+    """
     now = datetime.now().isoformat()
     with _db_lock:
         with get_db() as conn:
-            # Récupérer ou créer la conversation
             if not conv_id:
-                row = conn.execute(
-                    "SELECT conv_id FROM conversations WHERE user_id=? AND context=? ORDER BY updated_at DESC LIMIT 1",
-                    (user_id, context)
-                ).fetchone()
-                conv_id = row["conv_id"] if row else None
-
-            if not conv_id:
+                # Pas de conv_id → nouvelle conversation obligatoire
                 conv_id = new_conv_id()
-                # Titre depuis le premier message user
                 first_user = next((m["content"] for m in messages if m["role"] == "user"), "Nouvelle conversation")
                 title = generate_title(first_user)
                 conn.execute(
                     "INSERT INTO conversations (conv_id, user_id, agent, context, title, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
                     (conv_id, user_id, "david", context, title, now, now)
                 )
+                # Insérer tous les messages
+                for msg in messages:
+                    tokens = count_tokens(msg["content"])
+                    conn.execute(
+                        "INSERT INTO messages (conv_id, role, content, timestamp, token_count) VALUES (?,?,?,?,?)",
+                        (conv_id, msg["role"], msg["content"], now, tokens)
+                    )
+            else:
+                # conv_id connu → vérifier qu'elle existe, sinon la créer
+                row = conn.execute("SELECT conv_id FROM conversations WHERE conv_id=?", (conv_id,)).fetchone()
+                if not row:
+                    first_user = next((m["content"] for m in messages if m["role"] == "user"), "Nouvelle conversation")
+                    title = generate_title(first_user)
+                    conn.execute(
+                        "INSERT INTO conversations (conv_id, user_id, agent, context, title, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                        (conv_id, user_id, "david", context, title, now, now)
+                    )
+                # Compter les messages existants et insérer uniquement les nouveaux
+                existing = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM messages WHERE conv_id=?", (conv_id,)
+                ).fetchone()["cnt"]
+                for msg in messages[existing:]:
+                    tokens = count_tokens(msg["content"])
+                    conn.execute(
+                        "INSERT INTO messages (conv_id, role, content, timestamp, token_count) VALUES (?,?,?,?,?)",
+                        (conv_id, msg["role"], msg["content"], now, tokens)
+                    )
 
-            # Compter les messages existants
-            existing = conn.execute(
-                "SELECT COUNT(*) as cnt FROM messages WHERE conv_id=?", (conv_id,)
-            ).fetchone()["cnt"]
-
-            # Insérer uniquement les nouveaux
-            new_msgs = messages[existing:]
-            for msg in new_msgs:
-                tokens = count_tokens(msg["content"])
-                conn.execute(
-                    "INSERT INTO messages (conv_id, role, content, timestamp, token_count) VALUES (?,?,?,?,?)",
-                    (conv_id, msg["role"], msg["content"], now, tokens)
-                )
             conn.execute("UPDATE conversations SET updated_at=? WHERE conv_id=?", (now, conv_id))
             conn.commit()
     return conv_id
