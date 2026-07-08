@@ -1,0 +1,267 @@
+@import "tailwindcss";
+
+/* ── Flugia brand palette (from logo-name.svg: #4361EE → #4CC9F0) ───────── */
+@theme {
+  --color-brand-50: #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-200: #c7d2fe;
+  --color-brand-300: #a5b4fc;
+  --color-brand-400: #6b82f2;
+  --color-brand-500: #4361ee; /* button-blue */
+  --color-brand-600: #3a52d6;
+  --color-brand-700: #3144b0;
+  --color-brand-accent: #4cc9f0; /* accent (gradient end) */
+  --color-brand-strong: #008cfc; /* accent-strong (active states, links, icons) */
+  --color-brand-ink: #0f0f0f;
+}
+
+:root {
+  --background: #f8fafc;
+  --foreground: #0f0f0f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0f;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+button, [role="button"], a, label[for], select { cursor: pointer; }
+
+/* Primary flat color */
+:root { --primary: #4cc9f0; }
+
+/* Kept for compatibility but now flat — no gradient */
+.brand-gradient { background-color: var(--primary); }
+.brand-gradient-text { color: var(--primary); }
+
+/* ── Markdown rendering for agent replies (.md-content) ─────────────────── */
+.md-content {
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.md-content > :first-child { margin-top: 0; }
+.md-content > :last-child { margin-bottom: 0; }
+.md-content p { margin: 0.5rem 0; }
+.md-content h1,
+.md-content h2,
+.md-content h3 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0.9rem 0 0.4rem;
+}
+.md-content h1 { font-size: 1.15rem; }
+.md-content h2 { font-size: 1.05rem; }
+.md-content h3 { font-size: 1rem; }
+.md-content ul,
+.md-content ol {
+  margin: 0.4rem 0;
+  padding-left: 1.25rem;
+}
+.md-content ul { list-style: disc; }
+.md-content ol { list-style: decimal; }
+.md-content li { margin: 0.15rem 0; }
+.md-content li::marker { color: var(--color-brand-strong); }
+.md-content a {
+  color: var(--color-brand-strong);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md-content strong { font-weight: 600; }
+.md-content code {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.85em;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  padding: 0.1rem 0.3rem;
+  border-radius: 0.3rem;
+}
+.md-content pre {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  margin: 0.6rem 0;
+}
+.md-content pre code { background: none; padding: 0; }
+.md-content blockquote {
+  border-left: 3px solid var(--color-brand-accent);
+  padding-left: 0.75rem;
+  margin: 0.6rem 0;
+  opacity: 0.85;
+}
+.md-content table {
+  border-collapse: collapse;
+  margin: 0.6rem 0;
+  font-size: 0.875rem;
+}
+.md-content th,
+.md-content td {
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  padding: 0.35rem 0.6rem;
+  text-align: left;
+}
+.md-content hr {
+  border: none;
+  border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  margin: 0.8rem 0;
+}
+
+@keyframes aria-slide-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-aria-slide-up {
+  animation: aria-slide-up 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Page / section enter transition — gentle fade + settle */
+@keyframes page-in {
+  0%   { opacity: 0; transform: translateY(10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.animate-page-in {
+  animation: page-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Card / chip bubble-up — polished spring pop. Refined overshoot: rises,
+   gently overshoots scale, then settles. Used on dashboard + team overview. */
+@keyframes bubble-up {
+  0%   { opacity: 0; transform: translateY(18px) scale(0.94); }
+  55%  { opacity: 1; }
+  70%  { transform: translateY(-3px) scale(1.012); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.animate-bubble-up {
+  animation: bubble-up 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  will-change: transform, opacity;
+}
+
+/* Orb "pop-in" — richer entrance for the empty-chat state: scales up with a
+   slight overshoot + settle, instead of a plain fade. */
+@keyframes orb-pop-in {
+  0%   { opacity: 0; transform: scale(0.4) rotate(-8deg); }
+  55%  { opacity: 1; transform: scale(1.08) rotate(3deg); }
+  78%  { transform: scale(0.97) rotate(-1deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0deg); }
+}
+.animate-orb-pop {
+  animation: orb-pop-in 0.65s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+/* Skeleton shimmer — used on feature screens while data loads */
+@keyframes skeleton-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton {
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in srgb, currentColor 8%, transparent) 25%,
+    color-mix(in srgb, currentColor 16%, transparent) 37%,
+    color-mix(in srgb, currentColor 8%, transparent) 63%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  border-radius: 0.5rem;
+}
+
+/* "Two-way chat" icon — a light back-and-forth sway, as if the two message
+   bubbles in the icon are taking turns. */
+@keyframes chat-sway {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  25%      { transform: translateY(-3px) rotate(-8deg); }
+  50%      { transform: translateY(-1px) rotate(0deg); }
+  75%      { transform: translateY(-3px) rotate(7deg); }
+}
+.animate-chat-sway { animation: chat-sway 3.2s ease-in-out infinite; transform-origin: 50% 85%; }
+
+/* Bell "ring" — a few quick shakes, then a pause, repeating — mimics a
+   notification bell going off periodically rather than constant motion. */
+@keyframes ring-pulse {
+  0%, 8%, 100% { transform: rotate(0deg); }
+  10% { transform: rotate(-14deg); }
+  20% { transform: rotate(12deg); }
+  30% { transform: rotate(-9deg); }
+  40% { transform: rotate(7deg); }
+  50% { transform: rotate(-4deg); }
+  60% { transform: rotate(0deg); }
+}
+.animate-ring-pulse { animation: ring-pulse 3.5s ease-in-out infinite; transform-origin: 50% 20%; }
+
+/* AI orb (Aria avatar) — flat blue blobs drifting on irregular paths.
+   Waypoints are deliberately uneven so layered blobs don't sync into a loop. */
+@keyframes orb-a {
+  0%   { transform: translate(-12%, -6%) scale(1); }
+  22%  { transform: translate(16%, 9%)   scale(1.25); }
+  41%  { transform: translate(-4%, 20%)  scale(0.85); }
+  58%  { transform: translate(22%, -14%) scale(1.1); }
+  79%  { transform: translate(-18%, 4%)  scale(1.15); }
+  100% { transform: translate(-12%, -6%) scale(1); }
+}
+@keyframes orb-b {
+  0%   { transform: translate(10%, 12%)  scale(1.1); }
+  27%  { transform: translate(-16%, -8%) scale(0.9); }
+  49%  { transform: translate(6%, -20%)  scale(1.2); }
+  71%  { transform: translate(-10%, 16%) scale(1.05); }
+  88%  { transform: translate(18%, 2%)   scale(0.95); }
+  100% { transform: translate(10%, 12%)  scale(1.1); }
+}
+@keyframes orb-c {
+  0%   { transform: translate(4%, -16%)  scale(0.95); }
+  19%  { transform: translate(-20%, 6%)  scale(1.15); }
+  44%  { transform: translate(14%, 18%)  scale(0.9); }
+  63%  { transform: translate(-8%, -12%) scale(1.2); }
+  82%  { transform: translate(16%, 8%)   scale(1); }
+  100% { transform: translate(4%, -16%)  scale(0.95); }
+}
+@keyframes orb-spin { to { transform: rotate(360deg); } }
+@keyframes orb-hue { to { filter: hue-rotate(360deg); } }
+/* electric flicker — irregular so it reads like lightning/thunder over the fluid */
+@keyframes orb-flicker {
+  0%, 100% { opacity: 0.35; }
+  7%  { opacity: 0.9; }
+  11% { opacity: 0.4; }
+  19% { opacity: 1; }
+  23% { opacity: 0.5; }
+  38% { opacity: 0.8; }
+  42% { opacity: 0.45; }
+  55% { opacity: 0.3; }
+  67% { opacity: 0.95; }
+  71% { opacity: 0.5; }
+  86% { opacity: 0.75; }
+}
+@keyframes orb-drift {
+  0%, 100% { transform: rotate(-6deg) scale(0.95) translate(-1%, 1%); }
+  50%      { transform: rotate(7deg)  scale(1.16) translate(1%, -1%); }
+}
+/* Orb hover — soft energy bloom instead of scaling. Promoted to its own
+   compositor layer so the SVG filters aren't re-rasterized on transition. */
+.ai-orb {
+  cursor: pointer;
+  transform: translateZ(0);
+  filter: drop-shadow(0 0 0 rgba(76, 201, 240, 0)) brightness(1);
+  transition: filter 0.4s ease-out;
+}
+.ai-orb:hover {
+  filter: drop-shadow(0 0 16px rgba(76, 201, 240, 0.55)) brightness(1.1);
+}
+@media (prefers-reduced-motion: reduce) { .ai-orb:hover { filter: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-page-in,
+  .animate-bubble-up { animation-duration: 0.01ms; }
+  .skeleton { animation: none; }
+}
+
+@keyframes aria-bar-wave {
+  from { transform: scaleY(0.4); }
+  to   { transform: scaleY(1.2); }
+}
