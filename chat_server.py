@@ -274,19 +274,7 @@ async def compact_history_if_needed(
     compacted = [{"role": "assistant", "content": f"[CONTEXTE COMPACTÉ]\n{summary}"}]
     compacted.extend(recent)
 
-    # Mettre à jour la base avec l'historique compacté
-    sid = get_session_id(user_id, context)
-    now = datetime.now().isoformat()
-    with _db_lock:
-        with get_db() as conn:
-            conn.execute("DELETE FROM messages WHERE conv_id=?", (sid,))
-            for msg in compacted:
-                conn.execute(
-                    "INSERT INTO messages (conv_id, role, content, timestamp, token_count) VALUES (?,?,?,?,?)",
-                    (sid, msg["role"], msg["content"], now, count_tokens(msg["content"]))
-                )
-            conn.commit()
-
+    # Compactage en mémoire uniquement — la DB sera mise à jour via save_messages
     return compacted
 
 # ── Configuration SMTP ────────────────────────────────────────
@@ -1495,7 +1483,37 @@ async def health():
     return {"status": "ok", "agent": "David", "mode": api.MODE}
 
 
-@app.get("/conversations/{user_id}")
+@app.get("/dashboard/e-reputation")
+async def dashboard_erep():
+    """Données réelles E-Réputation pour le dashboard."""
+    try:
+        stats = await api.get_statistics()
+        reviews = await api.get_negative_reviews()
+        return {
+            "success": True,
+            "stats": stats.get("data", {}),
+            "negative_reviews": reviews.get("data", [])[:5] if reviews.get("success") else []
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.get("/dashboard/seo")
+async def dashboard_seo():
+    """Données réelles SEO pour le dashboard."""
+    try:
+        if not seo_api:
+            return {"success": False, "error": "Module SEO non disponible"}
+        posts = await seo_api.get_blog_posts(limit=5)
+        audits = await seo_api.get_seo_audits(limit=1)
+        suggestions = await seo_api.get_title_suggestions()
+        return {
+            "success": True,
+            "posts": posts.get("data", []) if posts.get("success") else [],
+            "latest_audit": audits.get("data", [None])[0] if audits.get("success") and audits.get("data") else None,
+            "suggestions_count": len(suggestions.get("data", [])) if suggestions.get("success") else 0
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 async def get_conversations(user_id: str, context: str = None):
     """Liste toutes les conversations d'un utilisateur, filtrées par contexte si précisé."""
     convs = list_conversations(user_id, context if context else None)
@@ -1648,6 +1666,20 @@ async def chat(req: ChatRequest):
                         yield f"data: {json.dumps({'type': 'token', 'text': delta.content})}\n\n"
                         await asyncio.sleep(0)
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+                # Sauvegarder aussi pour le path Haiku
+                try:
+                    full_history_h = []
+                    for m in messages[1:]:
+                        role = m.get("role")
+                        content_val = m.get("content")
+                        if role in ("user", "assistant") and isinstance(content_val, str) and content_val.strip():
+                            full_history_h.append({"role": role, "content": content_val})
+                    if full_history_h:
+                        active_cid_h = save_messages(user_id, context, full_history_h, conv_id=req.conv_id)
+                        yield "data: " + json.dumps({"type": "session", "conv_id": active_cid_h}) + "\n\n"
+                except Exception as he:
+                    print(f"[SESSION-HAIKU] Erreur: {he}")
                 return
 
             # ── Sonnet — boucle agentique : plusieurs tours d'outils possibles ──
@@ -1724,10 +1756,14 @@ async def chat(req: ChatRequest):
             try:
                 full_history = []
                 for m in messages[1:]:  # skip system prompt
-                    if m.get("role") in ["user", "assistant"] and isinstance(m.get("content"), str):
-                        full_history.append({"role": m["role"], "content": m["content"]})
-                active_cid = save_messages(user_id, context, full_history, conv_id=req.conv_id)
-                yield "data: " + json.dumps({"type": "session", "conv_id": active_cid}) + "\n\n"
+                    role = m.get("role")
+                    content_val = m.get("content")
+                    # Garder uniquement user/assistant avec contenu texte non vide
+                    if role in ("user", "assistant") and isinstance(content_val, str) and content_val.strip():
+                        full_history.append({"role": role, "content": content_val})
+                if full_history:
+                    active_cid = save_messages(user_id, context, full_history, conv_id=req.conv_id)
+                    yield "data: " + json.dumps({"type": "session", "conv_id": active_cid}) + "\n\n"
             except Exception as save_err:
                 print(f"[SESSION] Erreur sauvegarde: {save_err}")
 
