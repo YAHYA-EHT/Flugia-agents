@@ -15,18 +15,7 @@ import re
 import sys
 import uuid
 import pathlib
-import sqlite3
-import threading
 from datetime import datetime
-try:
-    import tiktoken
-    _enc = tiktoken.get_encoding("cl100k_base")
-    def count_tokens(text: str) -> int:
-        return len(_enc.encode(str(text)))
-except Exception:
-    def count_tokens(text: str) -> int:
-        return len(str(text)) // 4  # fallback approximation
-
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -42,7 +31,7 @@ try:
     REPORTLAB_OK = True
 except ImportError:
     REPORTLAB_OK = False
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,223 +48,6 @@ load_dotenv()
 # Dossier pour stocker les rapports générés (téléchargeables)
 REPORTS_DIR = pathlib.Path("reports")
 REPORTS_DIR.mkdir(exist_ok=True)
-
-def sanitize_for_json(obj):
-    """Nettoie récursivement un objet pour qu'il soit sérialisable en JSON propre."""
-    if isinstance(obj, dict):
-        return {k: sanitize_for_json(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [sanitize_for_json(i) for i in obj]
-    elif isinstance(obj, str):
-        # Supprimer les caractères de contrôle sauf newline/tab
-        cleaned = ''.join(c for c in obj if ord(c) >= 32 or c in '\n\t\r')
-        return cleaned
-    else:
-        return obj
-
-# ── Session Manager (SQLite) ─────────────────────────────────
-DB_PATH = pathlib.Path("sessions.db")
-_db_lock = threading.Lock()
-
-def get_db():
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_db():
-    with get_db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS conversations (
-                conv_id    TEXT PRIMARY KEY,
-                user_id    TEXT NOT NULL,
-                agent      TEXT NOT NULL DEFAULT 'david',
-                context    TEXT NOT NULL DEFAULT 'david',
-                title      TEXT NOT NULL DEFAULT 'Nouvelle conversation',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                conv_id     TEXT NOT NULL,
-                role        TEXT NOT NULL,
-                content     TEXT NOT NULL,
-                timestamp   TEXT NOT NULL,
-                token_count INTEGER DEFAULT 0,
-                FOREIGN KEY (conv_id) REFERENCES conversations(conv_id)
-            )
-        """)
-        conn.commit()
-
-init_db()
-
-def new_conv_id() -> str:
-    return str(uuid.uuid4())[:8]
-
-def generate_title(first_user_message: str) -> str:
-    """Génère un titre court depuis le premier message utilisateur."""
-    # Truncate and clean
-    title = first_user_message.strip()[:60]
-    if len(first_user_message) > 60:
-        title += "..."
-    return title or "Nouvelle conversation"
-
-TOKEN_THRESHOLD = 6000   # compacter au-delà de ce seuil
-KEEP_LAST_N    = 4       # garder les N derniers messages intacts
-
-def get_session_id(user_id: str, context: str) -> str:
-    return f"{user_id}_{context}"
-
-def load_history(user_id: str, context: str, conv_id: str = None) -> list:
-    """Charge l'historique d'une conversation spécifique.
-    Sans conv_id → retourne liste vide (nouvelle conversation propre).
-    """
-    if not conv_id:
-        return []
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT role, content FROM messages WHERE conv_id=? ORDER BY id",
-            (conv_id,)
-        ).fetchall()
-    return [{"role": r["role"], "content": r["content"]} for r in rows]
-
-def list_conversations(user_id: str, context: str = None) -> list:
-    """Liste toutes les conversations d'un utilisateur, groupées par date."""
-    with get_db() as conn:
-        query = "SELECT conv_id, context, title, created_at, updated_at FROM conversations WHERE user_id=?"
-        params = [user_id]
-        if context:
-            query += " AND context=?"
-            params.append(context)
-        query += " ORDER BY updated_at DESC"
-        rows = conn.execute(query, params).fetchall()
-    return [dict(r) for r in rows]
-
-def get_active_conv_id(user_id: str, context: str) -> str:
-    """Retourne l'ID de la conversation active, ou None."""
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT conv_id FROM conversations WHERE user_id=? AND context=? ORDER BY updated_at DESC LIMIT 1",
-            (user_id, context)
-        ).fetchone()
-    return row["conv_id"] if row else None
-
-def save_messages(user_id: str, context: str, messages: list, conv_id: str = None):
-    """Sauvegarde les messages dans une conversation.
-    Si conv_id fourni → ajoute dans cette conversation.
-    Si conv_id absent → crée TOUJOURS une nouvelle conversation (jamais de fusion avec l'existant).
-    """
-    now = datetime.now().isoformat()
-    with _db_lock:
-        with get_db() as conn:
-            if not conv_id:
-                # Pas de conv_id → nouvelle conversation obligatoire
-                conv_id = new_conv_id()
-                first_user = next((m["content"] for m in messages if m["role"] == "user"), "Nouvelle conversation")
-                title = generate_title(first_user)
-                conn.execute(
-                    "INSERT INTO conversations (conv_id, user_id, agent, context, title, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-                    (conv_id, user_id, "david", context, title, now, now)
-                )
-                # Insérer tous les messages
-                for msg in messages:
-                    tokens = count_tokens(msg["content"])
-                    conn.execute(
-                        "INSERT INTO messages (conv_id, role, content, timestamp, token_count) VALUES (?,?,?,?,?)",
-                        (conv_id, msg["role"], msg["content"], now, tokens)
-                    )
-            else:
-                # conv_id connu → vérifier qu'elle existe, sinon la créer
-                row = conn.execute("SELECT conv_id FROM conversations WHERE conv_id=?", (conv_id,)).fetchone()
-                if not row:
-                    first_user = next((m["content"] for m in messages if m["role"] == "user"), "Nouvelle conversation")
-                    title = generate_title(first_user)
-                    conn.execute(
-                        "INSERT INTO conversations (conv_id, user_id, agent, context, title, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-                        (conv_id, user_id, "david", context, title, now, now)
-                    )
-                # Compter les messages existants et insérer uniquement les nouveaux
-                existing = conn.execute(
-                    "SELECT COUNT(*) as cnt FROM messages WHERE conv_id=?", (conv_id,)
-                ).fetchone()["cnt"]
-                for msg in messages[existing:]:
-                    tokens = count_tokens(msg["content"])
-                    conn.execute(
-                        "INSERT INTO messages (conv_id, role, content, timestamp, token_count) VALUES (?,?,?,?,?)",
-                        (conv_id, msg["role"], msg["content"], now, tokens)
-                    )
-
-            conn.execute("UPDATE conversations SET updated_at=? WHERE conv_id=?", (now, conv_id))
-            conn.commit()
-    return conv_id
-
-def clear_conversation(user_id: str, context: str, conv_id: str = None):
-    """Supprime une conversation spécifique ou la conversation active."""
-    with _db_lock:
-        with get_db() as conn:
-            if not conv_id:
-                row = conn.execute(
-                    "SELECT conv_id FROM conversations WHERE user_id=? AND context=? ORDER BY updated_at DESC LIMIT 1",
-                    (user_id, context)
-                ).fetchone()
-                conv_id = row["conv_id"] if row else None
-            if conv_id:
-                conn.execute("DELETE FROM messages WHERE conv_id=?", (conv_id,))
-                conn.execute("DELETE FROM conversations WHERE conv_id=?", (conv_id,))
-                conn.commit()
-
-async def compact_history_if_needed(
-    messages: list,
-    user_id: str,
-    context: str
-) -> list:
-    """
-    Si l'historique dépasse TOKEN_THRESHOLD tokens,
-    résume tout sauf les KEEP_LAST_N derniers messages via le LLM.
-    """
-    total_tokens = sum(count_tokens(m["content"]) for m in messages)
-    if total_tokens <= TOKEN_THRESHOLD:
-        return messages
-
-    # Séparer : messages à résumer vs messages récents à garder intacts
-    to_summarize = messages[:-KEEP_LAST_N] if len(messages) > KEEP_LAST_N else []
-    recent       = messages[-KEEP_LAST_N:] if len(messages) >= KEEP_LAST_N else messages
-
-    if not to_summarize:
-        return messages
-
-    # Construire le texte à résumer
-    conv_text = "\n".join(
-        f"{m['role'].upper()}: {m['content'][:500]}" for m in to_summarize
-    )
-
-    # Appel LLM pour résumer
-    try:
-        summary_resp = client.chat.completions.create(
-            model=MODEL_HAIKU,
-            messages=[{
-                "role": "user",
-                "content": (
-                    "Résume cette conversation en 150 mots maximum. "
-                    "Inclus : ce qui a été demandé, les actions effectuées, "
-                    "les données importantes mentionnées (IDs, emails, URLs, statuts). "
-                    "Sois factuel et précis.\n\n" + conv_text
-                )
-            }],
-            max_tokens=300
-        )
-        summary = summary_resp.choices[0].message.content
-    except Exception:
-        # Fallback : résumé simple
-        summary = f"[Historique compacté — {len(to_summarize)} messages précédents]"
-
-    # Remplacer les anciens messages par le résumé
-    compacted = [{"role": "assistant", "content": f"[CONTEXTE COMPACTÉ]\n{summary}"}]
-    compacted.extend(recent)
-
-    # Compactage en mémoire uniquement — la DB sera mise à jour via save_messages
-    return compacted
 
 # ── Configuration SMTP ────────────────────────────────────────
 SMTP_HOST     = os.getenv("SMTP_HOST", "smtp.gmail.com")
@@ -321,6 +93,11 @@ try:
     from mcp_servers.seo import api_client as seo_api
 except ImportError:
     seo_api = None
+
+try:
+    from mcp_servers.sales import api_client as sales_api
+except ImportError:
+    sales_api = None
 
 # ── Modèles Anthropic via OpenRouter — format provider/model ──
 MODEL_HAIKU  = "anthropic/claude-haiku-4.5"
@@ -390,15 +167,23 @@ Règle : si ça ressemble à un chatbot de service client, reformuler.
 
 DAVID_SYSTEM_PROMPT = DAVID_BASE_PROMPT + DAVID_RULES
 
+# ── Chargement du prompt John (Sales) ──────────────────────────
+JOHN_MD_PATH = os.path.join(os.path.dirname(__file__), "skills", "john.md")
+if os.path.exists(JOHN_MD_PATH):
+    with open(JOHN_MD_PATH, "r", encoding="utf-8") as f:
+        JOHN_SYSTEM_PROMPT = f.read()
+else:
+    JOHN_SYSTEM_PROMPT = "Tu es John, l'AI Sales Manager de Flugia. Tu n'as pas encore d'outils branchés."
+
 # ── Prompts contextuels selon la feature ─────────────────────
 # Le frontend passe context="seo"|"e_reputation"|"linkedin"|"david"
 # David s adapte à la page où se trouve le client
 
 SEO_CONTEXT = """
-Tu es dans l espace SEO Content. Tu peux traiter toutes les demandes Marketing — SEO, E-Reputation et LinkedIn sont tous dans ton périmètre.
-Ne dis jamais au client d aller dans un autre espace Marketing — exécute directement la tâche demandée.
+Tu es actuellement dans l espace SEO Content de Flugia.
+Dans ce contexte, tu te concentres UNIQUEMENT sur le SEO : articles, audits, suggestions de titres, configuration.
 
-OUTILS SEO DISPONIBLES :
+OUTILS DISPONIBLES :
 - get_blog_posts(status?, limit?) → liste les articles générés (status: draft/completed/failed/published)
 - get_blog_post(post_id) → détail complet d un article
 - get_title_suggestions(status?) → suggestions de titres IA (suggested=à générer, used=déjà générés)
@@ -408,30 +193,37 @@ OUTILS SEO DISPONIBLES :
 - get_seo_settings() → config du compte (site, secteur, langue, brand)
 - send_email(to, subject, body, file_name?) → envoyer par email
 
-DÉBORDEMENT uniquement vers Sales (John) ou Support (Emily) si la demande sort du Marketing.
+COMPORTEMENT :
+- "Mes articles" / "articles en cours" → get_blog_posts()
+- "Articles échoués" / "failed" → get_blog_posts(status="failed")
+- "Suggestions de titres" / "idées d articles" → get_title_suggestions(status="suggested")
+- "Mon dernier audit" / "résultat de l audit" → get_seo_audits() puis get_seo_audit(id)
+- "Config SEO" / "mon site" / "ma langue cible" → get_seo_settings()
+- "Télécharge le rapport" / "envoie l audit" → proposer le PDF via send_email ou download_url
+- Enchaîner les outils si nécessaire : ex voir l audit → puis proposer d envoyer le PDF
+
+DÉBORDEMENT :
+- E-Reputation → "Je suis dans ton espace SEO. Pour les avis, accède à E-Reputation dans le menu."
+- LinkedIn → "Pour ton contenu LinkedIn, accède à l espace LinkedIn dans le menu."
+- Hors périmètre → orienter naturellement sans couper la conversation.
 """
 
 EREP_CONTEXT = """
-Tu es dans l espace E-Reputation. Tu peux traiter toutes les demandes Marketing — E-Reputation, SEO et LinkedIn sont tous dans ton périmètre.
-Ne dis jamais au client d aller dans un autre espace Marketing — exécute directement la tâche demandée.
-
-OUTILS E-REPUTATION DISPONIBLES :
-- fetch_reviews, get_statistics, get_negative_reviews, get_negative_analysis
-- get_negative_analysis_stats, get_status, get_notifications, get_notifications_activity
-- mark_notification_read, n8n_generate_review_response, n8n_analyze_reviews
-- n8n_collect_reviews, submit_reply, send_email
-
-DÉBORDEMENT uniquement vers Sales (John) ou Support (Emily) si la demande sort du Marketing.
+Tu es actuellement dans l espace E-Reputation de Flugia.
+Dans ce contexte, tu te concentres UNIQUEMENT sur l e-reputation : avis, score, réponses, notifications, analyse.
+Si le client aborde le SEO → "Je suis ici dans ton espace E-Reputation. Pour tout ce qui concerne le SEO et les articles, accède directement à SEO Content dans le menu Marketing."
+Si le client aborde LinkedIn → "Pour la gestion de ton contenu LinkedIn, accède à l espace LinkedIn dans le menu Marketing."
+Si le client aborde autre chose hors e-reputation → orienter naturellement vers le bon espace.
+Outils disponibles dans ce contexte : fetch_reviews, get_statistics, get_negative_reviews, get_negative_analysis, get_negative_analysis_stats, get_status, get_notifications, get_notifications_activity, mark_notification_read, n8n_generate_review_response, n8n_analyze_reviews, n8n_collect_reviews, submit_reply, send_email.
 """
 
 LINKEDIN_CONTEXT = """
-Tu es dans l espace LinkedIn. Tu peux traiter toutes les demandes Marketing — LinkedIn, SEO et E-Reputation sont tous dans ton périmètre.
-Ne dis jamais au client d aller dans un autre espace Marketing — exécute directement la tâche demandée.
-
-OUTILS LINKEDIN DISPONIBLES :
-- n8n_publish_linkedin_post, n8n_schedule_linkedin_posts, send_email
-
-DÉBORDEMENT uniquement vers Sales (John) ou Support (Emily) si la demande sort du Marketing.
+Tu es actuellement dans l espace LinkedIn de Flugia.
+Dans ce contexte, tu te concentres UNIQUEMENT sur LinkedIn : posts, calendrier éditorial, content studio, publication.
+Si le client aborde l e-reputation → "Je suis ici dans ton espace LinkedIn. Pour tes avis et ta réputation, accède directement à E-Reputation dans le menu Marketing."
+Si le client aborde le SEO → "Pour le SEO et les articles, accède à l espace SEO Content dans le menu Marketing."
+Si le client aborde autre chose hors LinkedIn → orienter naturellement vers le bon espace.
+Outils disponibles dans ce contexte : n8n_publish_linkedin_post, n8n_schedule_linkedin_posts, send_email.
 """
 
 CONTEXT_PROMPTS = {
@@ -444,11 +236,23 @@ CONTEXT_PROMPTS = {
 # Outils disponibles par contexte
 TOOLS_BY_CONTEXT = {
     "david": None,  # None = tous les outils
-    # Tous les contextes Marketing ont accès à tous les outils Marketing
-    # La distinction contextuelle sert uniquement au prompt — pas aux outils
-    "e_reputation": ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "n8n_publish_linkedin_post", "n8n_schedule_linkedin_posts", "send_email"],
-    "seo":          ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "n8n_publish_linkedin_post", "n8n_schedule_linkedin_posts", "send_email"],
-    "linkedin":     ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "n8n_publish_linkedin_post", "n8n_schedule_linkedin_posts", "send_email"],
+    "e_reputation": [
+        "fetch_reviews", "get_statistics", "get_negative_reviews",
+        "get_negative_analysis", "get_negative_analysis_stats", "get_status",
+        "get_notifications", "get_notifications_activity", "mark_notification_read",
+        "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews",
+        "send_email"
+    ],
+    "seo": [
+        "get_blog_posts", "get_blog_post", "get_title_suggestions",
+        "get_seo_audits", "get_seo_audit", "get_seo_audit_status",
+        "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit",
+        "n8n_generate_title_suggestions", "n8n_regenerate_blog_post",
+        "update_blog_post", "reject_title_suggestion", "send_email"
+    ],
+    "linkedin": [
+        "n8n_publish_linkedin_post", "n8n_schedule_linkedin_posts", "send_email"
+    ],
 }
 
 def get_tools_for_context(context: str) -> list:
@@ -722,11 +526,6 @@ TOOLS = [
                     "title_suggestion_id": {
                         "type": "integer",
                         "description": "ID de la suggestion de titre si l article est basé sur une suggestion existante"
-                    },
-                    "target_region": {
-                        "type": "string",
-                        "description": "Région cible pour le contenu (ex: be, fr, nl) — récupérer depuis get_seo_settings() si non précisé",
-                        "default": "be"
                     }
                 },
                 "required": ["title", "keywords"]
@@ -813,11 +612,6 @@ TOOLS = [
                     "post_id": {
                         "type": "integer",
                         "description": "ID de l article SEO à régénérer (status doit être failed)"
-                    },
-                    "target_region": {
-                        "type": "string",
-                        "description": "Région cible (ex: be, fr, nl) — récupéré automatiquement depuis l article ou les settings si non précisé",
-                        "default": "be"
                     }
                 },
                 "required": ["post_id"]
@@ -896,6 +690,101 @@ TOOLS = [
                 },
                 "required": ["to_email", "subject", "body"]
             }
+        }
+    }
+]
+
+# ── Outils Sales (John) — Prospecting + Campaigns ─────────────
+SALES_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_lead_lists",
+            "description": "Liste toutes les listes de leads (prospects) de la société. Appeler pour toute question sur les listes de prospects existantes.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_lead_list_details",
+            "description": "Détail d'une liste de leads spécifique, avec les leads qu'elle contient.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "list_id": {"type": "integer", "description": "ID de la liste de leads"}
+                },
+                "required": ["list_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_leads",
+            "description": (
+                "Récupère les leads (prospects) enrichis de la société, avec filtres optionnels. "
+                "Appeler pour toute question sur les prospects, leur nombre, leur qualité, ou pour en chercher un précis."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "search": {"type": "string", "description": "Recherche par nom, entreprise ou email"},
+                    "industry": {"type": "string", "description": "Filtrer par secteur d'activité"},
+                    "min_score": {"type": "number", "description": "Score minimum de qualification du lead"},
+                    "per_page": {"type": "integer", "default": 20}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_prospecting_status",
+            "description": "Statut de la feature Prospecting pour la société (active, en attente de configuration, etc.)",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_campaigns",
+            "description": (
+                "Liste les campagnes d'outreach/prospection par email. Appeler pour toute question sur les campagnes en cours, "
+                "leur statut, ou pour avoir une vue d'ensemble du pipeline commercial."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "enum": ["draft", "active", "paused", "completed", "archived"],
+                               "description": "Filtrer par statut de campagne"}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_campaign",
+            "description": "Détail complet d'une campagne d'outreach : contacts, statut d'envoi, statistiques.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "campaign_id": {"type": "integer", "description": "ID de la campagne"}
+                },
+                "required": ["campaign_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_campaign_statistics",
+            "description": (
+                "Statistiques agrégées de toutes les campagnes : nombre total, campagnes actives, contacts, "
+                "emails envoyés, taux de réponse. Appeler pour un bilan global de la prospection."
+            ),
+            "parameters": {"type": "object", "properties": {}}
         }
     }
 ]
@@ -1174,72 +1063,6 @@ async def execute_tool(name: str, args: dict) -> dict:
         elif name == "get_blog_post":
             if seo_api:
                 result = await seo_api.get_blog_post(post_id=clean["post_id"])
-                # Générer un PDF téléchargeable si l'article est completed
-                if result.get("success") and result.get("data"):
-                    post = result["data"]
-                    if post.get("status") == "completed" and REPORTLAB_OK:
-                        file_id = str(uuid.uuid4())[:8]
-                        file_name = f"article_seo_{post.get('id', 'x')}_{file_id}.pdf"
-                        file_path = REPORTS_DIR / file_name
-                        doc = SimpleDocTemplate(
-                            str(file_path), pagesize=A4,
-                            rightMargin=2*cm, leftMargin=2*cm,
-                            topMargin=2*cm, bottomMargin=2*cm
-                        )
-                        styles = getSampleStyleSheet()
-                        cyan  = colors.HexColor("#00B4D8")
-                        navy  = colors.HexColor("#0D1B2A")
-                        title_style   = ParagraphStyle("title",   parent=styles["Heading1"], fontSize=18, textColor=navy, spaceAfter=6)
-                        sub_style     = ParagraphStyle("sub",     parent=styles["Normal"],   fontSize=10, textColor=colors.HexColor("#4A5568"), spaceAfter=12)
-                        section_style = ParagraphStyle("section", parent=styles["Heading2"], fontSize=13, textColor=cyan, spaceBefore=14, spaceAfter=6)
-                        body_style    = ParagraphStyle("body",    parent=styles["Normal"],   fontSize=10, leading=16, textColor=navy)
-                        story = []
-                        story.append(Paragraph(f"Article SEO — {post.get('title', '')}", title_style))
-                        story.append(Paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')} — Flugia AI", sub_style))
-                        story.append(HRFlowable(width="100%", thickness=2, color=cyan, spaceAfter=12))
-                        # Infos article
-                        story.append(Paragraph("Informations", section_style))
-                        info_data = [
-                            ["Champ", "Valeur"],
-                            ["Titre", str(post.get("title", "-"))],
-                            ["Statut", str(post.get("status", "-"))],
-                            ["Langue", str(post.get("language", "-"))],
-                            ["URL", str(post.get("article_url") or "-")],
-                            ["Slug", str(post.get("slug") or "-")],
-                        ]
-                        kw = post.get("keywords", [])
-                        if kw:
-                            info_data.append(["Mots-clés", ", ".join(kw) if isinstance(kw, list) else str(kw)])
-                        t = Table(info_data, colWidths=[5*cm, 12*cm])
-                        t.setStyle(TableStyle([
-                            ("BACKGROUND", (0,0), (-1,0), navy),
-                            ("TEXTCOLOR",  (0,0), (-1,0), colors.white),
-                            ("FONTNAME",   (0,0), (-1,0), "Helvetica-Bold"),
-                            ("FONTSIZE",   (0,0), (-1,-1), 9),
-                            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#F7FAFB"), colors.white]),
-                            ("GRID",       (0,0), (-1,-1), 0.5, colors.HexColor("#E8EDF2")),
-                            ("PADDING",    (0,0), (-1,-1), 7),
-                            ("WORDWRAP",   (1,1), (1,-1), "CJK"),
-                        ]))
-                        story.append(t)
-                        story.append(Spacer(1, 10))
-                        # Description
-                        if post.get("description"):
-                            story.append(Paragraph("Description", section_style))
-                            story.append(Paragraph(post["description"], body_style))
-                            story.append(Spacer(1, 8))
-                        # Uploads / images
-                        uploads = post.get("uploads", [])
-                        if uploads:
-                            story.append(Paragraph("Visuels générés", section_style))
-                            story.append(Paragraph(f"{len(uploads)} image(s) générée(s) et uploadée(s) sur S3.", body_style))
-                            for up in uploads[:3]:
-                                url = up.get("meta", {}).get("url", "")
-                                if url:
-                                    story.append(Paragraph(f"- {url}", body_style))
-                        doc.build(story)
-                        result["download_url"] = f"/reports/{file_name}"
-                        result["file_name"] = file_name
             else:
                 result = {"error": "Module SEO non disponible"}
         elif name == "get_title_suggestions":
@@ -1331,20 +1154,11 @@ async def execute_tool(name: str, args: dict) -> dict:
 
         elif name == "n8n_generate_blog_post":
             if seo_api:
-                # Récupérer target_region depuis les settings si non fourni
-                target_region = clean.get("target_region", "be")
-                if not clean.get("target_region"):
-                    try:
-                        settings = await seo_api.get_seo_settings()
-                        target_region = settings.get("data", {}).get("target_region", "be") or "be"
-                    except Exception:
-                        target_region = "be"
                 result = await seo_api.n8n_generate_blog_post(
                     title=clean["title"],
                     keywords=clean.get("keywords", []),
                     language=clean.get("language", "fr"),
-                    title_suggestion_id=clean.get("title_suggestion_id"),
-                    target_region=target_region
+                    title_suggestion_id=clean.get("title_suggestion_id")
                 )
                 # Informer David du comportement asynchrone
                 if result.get("success") and result.get("data", {}).get("status") == "processing":
@@ -1397,37 +1211,13 @@ async def execute_tool(name: str, args: dict) -> dict:
 
         elif name == "n8n_regenerate_blog_post":
             if seo_api:
-                # Récupérer target_region depuis l article lui-même ou les settings
-                target_region = clean.get("target_region")
-                if not target_region:
-                    try:
-                        # Essayer de récupérer depuis l article
-                        post_detail = await seo_api.get_blog_post(post_id=clean["post_id"])
-                        target_region = (post_detail.get("data") or {}).get("target_region")
-                    except Exception:
-                        pass
-                if not target_region:
-                    try:
-                        settings = await seo_api.get_seo_settings()
-                        target_region = (settings.get("data") or {}).get("target_region", "be") or "be"
-                    except Exception:
-                        target_region = "be"
-
                 result = await seo_api.n8n_regenerate_blog_post(
-                    post_id=clean["post_id"],
-                    target_region=target_region
+                    post_id=clean["post_id"]
                 )
-                # Vérifier le succès avant d'annoncer
-                if result.get("success") and result.get("data", {}).get("status") == "processing":
+                if result.get("success"):
                     result["info"] = (
-                        f"Régénération lancée avec target_region={target_region} — "
-                        "l article repassera de failed à processing puis completed via n8n. "
-                        "Dis-moi quand tu veux que je vérifie le statut."
-                    )
-                elif not result.get("success"):
-                    result["info"] = (
-                        f"La régénération a échoué : {result.get('message', 'erreur inconnue')}. "
-                        "Vérifie que l article existe bien et est en status failed."
+                        f"Régénération de l article {clean['post_id']} lancée — "
+                        "status passera de failed à processing puis completed via n8n."
                     )
             else:
                 result = {"error": "Module SEO non disponible"}
@@ -1447,9 +1237,46 @@ async def execute_tool(name: str, args: dict) -> dict:
             else:
                 result = {"error": "Module SEO non disponible"}
 
+        # ── Outils Sales (John) ──────────────────────────────────
+        elif name == "get_lead_lists":
+            if sales_api:
+                result = await sales_api.get_lead_lists()
+            else:
+                result = {"error": "Module Sales non disponible"}
+        elif name == "get_lead_list_details":
+            if sales_api:
+                result = await sales_api.get_lead_list_details(list_id=clean["list_id"])
+            else:
+                result = {"error": "Module Sales non disponible"}
+        elif name == "get_leads":
+            if sales_api:
+                result = await sales_api.get_leads(**clean)
+            else:
+                result = {"error": "Module Sales non disponible"}
+        elif name == "get_prospecting_status":
+            if sales_api:
+                result = await sales_api.get_prospecting_status()
+            else:
+                result = {"error": "Module Sales non disponible"}
+        elif name == "get_campaigns":
+            if sales_api:
+                result = await sales_api.get_campaigns(**clean)
+            else:
+                result = {"error": "Module Sales non disponible"}
+        elif name == "get_campaign":
+            if sales_api:
+                result = await sales_api.get_campaign(campaign_id=clean["campaign_id"])
+            else:
+                result = {"error": "Module Sales non disponible"}
+        elif name == "get_campaign_statistics":
+            if sales_api:
+                result = await sales_api.get_campaign_statistics()
+            else:
+                result = {"error": "Module Sales non disponible"}
+
         else:
             result = {"error": f"Outil inconnu: {name}"}
-        return sanitize_for_json(result)
+        return result
     except Exception as e:
         return {"error": str(e), "tool": name}
 
@@ -1464,155 +1291,28 @@ app.mount("/reports", StaticFiles(directory="reports"), name="reports")
 class ChatRequest(BaseModel):
     message: str
     history: list = []
-    context: str = "david"
-    user_id: str = "default_user"
-    conv_id: Optional[str] = None  # ID de la conversation active (None = créer/utiliser la dernière)
-
-    class Config:
-        # Accepter null/None depuis le JSON frontend
-        arbitrary_types_allowed = True
+    context: str = "david"  # "david" | "e_reputation" | "seo" | "linkedin"
+    agent: str = "david"    # "david" | "john" — quel agent traite ce message
 
 
 @app.get("/", response_class=HTMLResponse)
-def read_index():
+def read_dashboard():
+    with open("dashboard.html", "r", encoding="utf-8") as f:
+        return f.read()
+
+@app.get("/marketing", response_class=HTMLResponse)
+def read_marketing():
     with open("david_frontend.html", "r", encoding="utf-8") as f:
+        return f.read()
+
+@app.get("/sales", response_class=HTMLResponse)
+def read_sales():
+    with open("john_frontend.html", "r", encoding="utf-8") as f:
         return f.read()
 
 @app.get("/health")
 async def health():
     return {"status": "ok", "agent": "David", "mode": api.MODE}
-
-
-@app.get("/dashboard/e-reputation")
-async def dashboard_erep():
-    """Données réelles E-Réputation pour le dashboard."""
-    try:
-        stats = await api.get_statistics()
-        reviews = await api.get_negative_reviews()
-        return {
-            "success": True,
-            "stats": stats.get("data", {}),
-            "negative_reviews": reviews.get("data", [])[:5] if reviews.get("success") else []
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.get("/dashboard/seo")
-async def dashboard_seo():
-    """Données réelles SEO pour le dashboard."""
-    try:
-        if not seo_api:
-            return {"success": False, "error": "Module SEO non disponible"}
-        posts = await seo_api.get_blog_posts(limit=5)
-        audits = await seo_api.get_seo_audits(limit=1)
-        suggestions = await seo_api.get_title_suggestions()
-        return {
-            "success": True,
-            "posts": posts.get("data", []) if posts.get("success") else [],
-            "latest_audit": audits.get("data", [None])[0] if audits.get("success") and audits.get("data") else None,
-            "suggestions_count": len(suggestions.get("data", [])) if suggestions.get("success") else 0
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-async def get_conversations(user_id: str, context: str = None):
-    """Liste toutes les conversations d'un utilisateur, filtrées par contexte si précisé."""
-    convs = list_conversations(user_id, context if context else None)
-    return {"conversations": convs}
-
-@app.get("/conversations/{user_id}/{conv_id}/messages")
-async def get_conv_messages(user_id: str, conv_id: str):
-    """Charge les messages d'une conversation spécifique."""
-    history = load_history(user_id, context=None, conv_id=conv_id)
-    return {"history": history, "count": len(history)}
-
-@app.delete("/conversations/{user_id}/{conv_id}")
-async def delete_conversation(user_id: str, conv_id: str):
-    """Supprime une conversation spécifique."""
-    clear_conversation(user_id, context=None, conv_id=conv_id)
-    return {"success": True}
-
-@app.post("/conversations/{user_id}/new")
-async def new_conversation(user_id: str, context: str = "david"):
-    """Crée une nouvelle conversation vide."""
-    return {"conv_id": new_conv_id(), "user_id": user_id, "context": context}
-
-
-@app.get("/context/seo")
-async def seo_context():
-    """
-    Retourne un résumé proactif du contexte SEO au démarrage du chat.
-    Le frontend l'appelle quand le client ouvre l'espace SEO.
-    """
-    try:
-        if not seo_api:
-            return {"available": False}
-
-        # Récupérer les données en parallèle
-        import asyncio
-        posts_task    = seo_api.get_blog_posts(limit=50)
-        audits_task   = seo_api.get_seo_audits(limit=5)
-        suggest_task  = seo_api.get_title_suggestions(status="suggested")
-
-        posts_r, audits_r, suggest_r = await asyncio.gather(
-            posts_task, audits_task, suggest_task,
-            return_exceptions=True
-        )
-
-        # Analyser les articles
-        articles_failed    = []
-        articles_processing = []
-        articles_completed = []
-
-        if isinstance(posts_r, dict) and posts_r.get("data"):
-            for p in posts_r["data"]:
-                if p.get("status") == "failed":
-                    articles_failed.append({"id": p["id"], "title": p.get("title", "")[:60]})
-                elif p.get("status") == "processing":
-                    articles_processing.append({"id": p["id"], "title": p.get("title", "")[:60]})
-                elif p.get("status") == "completed":
-                    articles_completed.append({"id": p["id"], "title": p.get("title", "")[:60]})
-
-        # Analyser les audits
-        last_audit = None
-        if isinstance(audits_r, dict) and audits_r.get("data"):
-            audits = audits_r["data"]
-            if audits:
-                last_audit = {
-                    "id": audits[0]["id"],
-                    "status": audits[0]["status"],
-                    "domain": audits[0].get("domain", ""),
-                    "date": audits[0].get("timestamps", {}).get("audit_completed_at", "")[:10],
-                    "has_pdf": bool(audits[0].get("report_pdf_url"))
-                }
-
-        # Analyser les suggestions
-        suggestions_count = 0
-        if isinstance(suggest_r, dict) and suggest_r.get("data"):
-            suggestions_count = len(suggest_r["data"])
-
-        # Construire le message proactif
-        alerts = []
-        if articles_failed:
-            alerts.append(f"{len(articles_failed)} article(s) en échec")
-        if articles_processing:
-            alerts.append(f"{len(articles_processing)} article(s) en cours de génération")
-        if suggestions_count:
-            alerts.append(f"{suggestions_count} suggestion(s) de titres disponibles")
-        if last_audit and last_audit["status"] == "se_ranking_failed":
-            alerts.append(f"dernier audit échoué sur {last_audit['domain']}")
-
-        return {
-            "available": True,
-            "articles_failed": articles_failed,
-            "articles_processing": articles_processing,
-            "articles_completed_count": len(articles_completed),
-            "suggestions_count": suggestions_count,
-            "last_audit": last_audit,
-            "alerts": alerts,
-            "total_articles": len(articles_failed) + len(articles_processing) + len(articles_completed)
-        }
-    except Exception as e:
-        return {"available": False, "error": str(e)}
 
 
 @app.get("/dashboard")
@@ -1630,22 +1330,21 @@ async def dashboard():
 async def chat(req: ChatRequest):
     async def generate() -> AsyncGenerator[str, None]:
         try:
-            # System prompt adapté au contexte de la feature
-            context = req.context if req.context in CONTEXT_PROMPTS else "david"
-            user_id = req.user_id if req.user_id else "default_user"
+            recent_history = req.history[-6:] if len(req.history) > 6 else req.history
 
-            # Charger l'historique depuis SQLite
-            db_history = load_history(user_id, context, conv_id=req.conv_id if req.conv_id else None)
-            working_history = db_history if db_history else req.history
-
-            # Compacter si nécessaire (seuil tokens)
-            working_history = await compact_history_if_needed(working_history, user_id, context)
-            context_addon = CONTEXT_PROMPTS[context]
-            system_prompt = DAVID_SYSTEM_PROMPT + (f"\n{context_addon}" if context_addon else "")
-            context_tools = get_tools_for_context(context)
+            if req.agent == "john":
+                # John — persona + outils Sales (leads + campagnes)
+                system_prompt = JOHN_SYSTEM_PROMPT
+                context_tools = SALES_TOOLS
+            else:
+                # System prompt adapté au contexte de la feature (David)
+                context = req.context if req.context in CONTEXT_PROMPTS else "david"
+                context_addon = CONTEXT_PROMPTS[context]
+                system_prompt = DAVID_SYSTEM_PROMPT + (f"\n{context_addon}" if context_addon else "")
+                context_tools = get_tools_for_context(context)
 
             messages = [{"role": "system", "content": system_prompt}]
-            for h in working_history:
+            for h in recent_history:
                 messages.append({"role": h["role"], "content": h["content"]})
             messages.append({"role": "user", "content": req.message})
 
@@ -1666,20 +1365,6 @@ async def chat(req: ChatRequest):
                         yield f"data: {json.dumps({'type': 'token', 'text': delta.content})}\n\n"
                         await asyncio.sleep(0)
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
-
-                # Sauvegarder aussi pour le path Haiku
-                try:
-                    full_history_h = []
-                    for m in messages[1:]:
-                        role = m.get("role")
-                        content_val = m.get("content")
-                        if role in ("user", "assistant") and isinstance(content_val, str) and content_val.strip():
-                            full_history_h.append({"role": role, "content": content_val})
-                    if full_history_h:
-                        active_cid_h = save_messages(user_id, context, full_history_h, conv_id=req.conv_id)
-                        yield "data: " + json.dumps({"type": "session", "conv_id": active_cid_h}) + "\n\n"
-                except Exception as he:
-                    print(f"[SESSION-HAIKU] Erreur: {he}")
                 return
 
             # ── Sonnet — boucle agentique : plusieurs tours d'outils possibles ──
@@ -1751,21 +1436,6 @@ async def chat(req: ChatRequest):
                         await asyncio.sleep(0)
 
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
-
-            # Sauvegarder la conversation dans SQLite
-            try:
-                full_history = []
-                for m in messages[1:]:  # skip system prompt
-                    role = m.get("role")
-                    content_val = m.get("content")
-                    # Garder uniquement user/assistant avec contenu texte non vide
-                    if role in ("user", "assistant") and isinstance(content_val, str) and content_val.strip():
-                        full_history.append({"role": role, "content": content_val})
-                if full_history:
-                    active_cid = save_messages(user_id, context, full_history, conv_id=req.conv_id)
-                    yield "data: " + json.dumps({"type": "session", "conv_id": active_cid}) + "\n\n"
-            except Exception as save_err:
-                print(f"[SESSION] Erreur sauvegarde: {save_err}")
 
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
