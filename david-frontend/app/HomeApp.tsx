@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/aria/state/authStore";
 import { Aria } from "@/components/aria/Aria";
 import { David } from "@/components/david/David";
+import { John } from "@/components/john/John";
 import { FlugiaShell } from "@/components/flugia/FlugiaShell";
 import { FlugiaMainDashboard } from "@/components/flugia/FlugiaMainDashboard";
 import { OverviewScreen } from "@/components/aria/OverviewScreen";
@@ -49,7 +50,7 @@ export default function HomeApp() {
 
   useEffect(() => { void bootstrap(); }, [bootstrap]);
 
-  const { mainView, page, agentId, marketingFeature } = parseRoute(pathname);
+  const { mainView, page, agentId, marketingFeature, salesFeature } = parseRoute(pathname);
 
   if (status === "unknown") {
     return (
@@ -135,6 +136,8 @@ export default function HomeApp() {
       {mainView === "agent" && agentId && (
         agentId === "marketing" ? (
           <David onBack={() => router.push(dashboardPath())} initialFeature={marketingFeature} />
+        ) : agentId === "sales" ? (
+          <John onBack={() => router.push(dashboardPath())} initialFeature={salesFeature} />
         ) : (
           <AgentPlaceholder agentId={agentId} onBack={() => router.push(dashboardPath())} />
         )
