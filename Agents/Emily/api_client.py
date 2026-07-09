@@ -23,7 +23,11 @@ class EmilyApiClient:
     async def _refresh_token(self) -> str:
         r = await self._client.post("/api/login", json={"email": EMAIL, "password": PASSWORD})
         r.raise_for_status()
-        self._token = r.json()["token"]
+        data = r.json()
+        # L'API retourne data.access_token
+        self._token = data.get("data", {}).get("access_token") or data.get("access_token") or data.get("token")
+        if not self._token:
+            raise ValueError(f"Token introuvable dans la réponse login: {list(data.keys())}")
         return self._token
 
     def _headers(self) -> dict:

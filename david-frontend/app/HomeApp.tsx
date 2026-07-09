@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/aria/state/authStore";
 import { Aria } from "@/components/aria/Aria";
 import { David } from "@/components/david/David";
+import { Emily } from "@/components/emily/Emily";
 import { FlugiaShell } from "@/components/flugia/FlugiaShell";
 import { FlugiaMainDashboard } from "@/components/flugia/FlugiaMainDashboard";
 import { OverviewScreen } from "@/components/aria/OverviewScreen";
@@ -49,7 +50,7 @@ export default function HomeApp() {
 
   useEffect(() => { void bootstrap(); }, [bootstrap]);
 
-  const { mainView, page, agentId, marketingFeature } = parseRoute(pathname);
+  const { mainView, page, agentId, marketingFeature, supportFeature } = parseRoute(pathname);
 
   if (status === "unknown") {
     return (
@@ -92,7 +93,7 @@ export default function HomeApp() {
       case "campaigns":     return router.push("/dashboard/sales/campaigns");
       // Sub-features Support
       case "chatbot":       return router.push("/dashboard/support/chatbot");
-      case "call-agent":    return router.push("/dashboard/support/call-agent");
+      case "call-agent":    return router.push("/dashboard/support/agent-call");
       default:              return router.push(dashboardPath());
     }
   };
@@ -135,6 +136,8 @@ export default function HomeApp() {
       {mainView === "agent" && agentId && (
         agentId === "marketing" ? (
           <David onBack={() => router.push(dashboardPath())} initialFeature={marketingFeature} />
+        ) : agentId === "support" ? (
+          <Emily onBack={() => router.push(dashboardPath())} initialFeature={supportFeature} />
         ) : (
           <AgentPlaceholder agentId={agentId} onBack={() => router.push(dashboardPath())} />
         )

@@ -54,10 +54,16 @@ from dotenv import load_dotenv
 from fastapi.responses import HTMLResponse
 
 sys.path.append(os.path.dirname(__file__))
-load_dotenv()
+# Charger .env depuis le dossier de l'agent
+import pathlib as _pl
+for _ep in [_pl.Path(__file__).parent/'.env', _pl.Path(__file__).parent.parent/'.env', _pl.Path('.env')]:
+    if _ep.exists():
+        load_dotenv(dotenv_path=str(_ep)); break
+else:
+    load_dotenv()
 
 # Dossier pour stocker les rapports générés (téléchargeables)
-REPORTS_DIR = pathlib.Path("reports")
+REPORTS_DIR = pathlib.Path(__file__).parent / "reports"
 REPORTS_DIR.mkdir(exist_ok=True)
 
 def sanitize_for_json(obj):
@@ -74,7 +80,7 @@ def sanitize_for_json(obj):
         return obj
 
 # ── Session Manager (SQLite) ─────────────────────────────────
-DB_PATH = pathlib.Path("sessions.db")
+DB_PATH = pathlib.Path(__file__).parent / "sessions.db"
 _db_lock = threading.Lock()
 
 def get_db():
@@ -274,7 +280,19 @@ async def compact_history_if_needed(
     compacted = [{"role": "assistant", "content": f"[CONTEXTE COMPACTÉ]\n{summary}"}]
     compacted.extend(recent)
 
-    # Compactage en mémoire uniquement — la DB sera mise à jour via save_messages
+    # Mettre à jour la base avec l'historique compacté
+    sid = get_session_id(user_id, context)
+    now = datetime.now().isoformat()
+    with _db_lock:
+        with get_db() as conn:
+            conn.execute("DELETE FROM messages WHERE conv_id=?", (sid,))
+            for msg in compacted:
+                conn.execute(
+                    "INSERT INTO messages (conv_id, role, content, timestamp, token_count) VALUES (?,?,?,?,?)",
+                    (sid, msg["role"], msg["content"], now, count_tokens(msg["content"]))
+                )
+            conn.commit()
+
     return compacted
 
 # ── Configuration SMTP ────────────────────────────────────────
@@ -285,7 +303,6 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")   # mot de passe app Gmail
 SMTP_FROM     = os.getenv("SMTP_FROM", "David — Flugia <david@flugia.com>")
 
 def send_email_with_attachment(to_email: str, subject: str, body: str, file_path: str = None, file_name: str = None) -> bool:
-    """Envoie un email via SMTP, avec ou sans pièce jointe. Retourne True si succès."""
     try:
         msg = MIMEMultipart()
         msg["From"]    = SMTP_FROM
@@ -312,15 +329,46 @@ def send_email_with_attachment(to_email: str, subject: str, body: str, file_path
         print(f"[SMTP ERROR] {e}")
         return False
 
+def send_email_multi_attachments(to_email: str, subject: str, body: str, file_names: list) -> bool:
+    """Envoie un email avec plusieurs pièces jointes PDF."""
+    try:
+        msg = MIMEMultipart()
+        msg["From"]    = SMTP_FROM
+        msg["To"]      = to_email
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "html", "utf-8"))
+        for fn in file_names:
+            fp = REPORTS_DIR / fn
+            if fp.exists():
+                with open(fp, "rb") as f:
+                    part = MIMEBase("application", "octet-stream")
+                    part.set_payload(f.read())
+                    encoders.encode_base64(part)
+                    part.add_header("Content-Disposition", f'attachment; filename="{fn}"')
+                    msg.attach(part)
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.ehlo(); server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(SMTP_USER, to_email, msg.as_string())
+        return True
+    except Exception as e:
+        print(f"[SMTP MULTI ERROR] {e}")
+        return False
+
+# Import flexible — supporte nouvelle structure agents/david/mcp_servers/
+api = None
+seo_api = None
 try:
     from mcp_servers.e_reputation import api_client as api
 except ImportError:
-    import api_client as api
-
+    try:
+        import api_client as api
+    except ImportError:
+        pass
 try:
     from mcp_servers.seo import api_client as seo_api
 except ImportError:
-    seo_api = None
+    pass
 
 # ── Modèles Anthropic via OpenRouter — format provider/model ──
 MODEL_HAIKU  = "anthropic/claude-haiku-4.5"
@@ -890,11 +938,63 @@ TOOLS = [
                     },
                     "file_name": {
                         "type": "string",
-                        "description": "Nom du fichier à joindre si applicable (ex: rapport_e_reputation_abc123.pdf). Laisser vide si pas de pièce jointe.",
+                        "description": "Nom d un seul fichier PDF à joindre (ex: rapport_e_reputation_abc123.pdf).",
                         "default": ""
+                    },
+                    "file_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Liste de plusieurs fichiers PDF à joindre en pièces jointes multiples (ex: ['rapport_erep.pdf', 'rapport_seo.pdf']). Utiliser pour envoyer plusieurs rapports en un seul email.",
+                        "default": []
                     }
                 },
                 "required": ["to_email", "subject", "body"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_conversation_pdf",
+            "description": (
+                "Génère un PDF téléchargeable du résumé ou du contenu d'une conversation, analyse, "
+                "liste de réponses aux avis, plan d'action, ou tout autre contenu textuel. "
+                "Utiliser quand le client veut un PDF d'une conversation, d'un résumé, ou de tout contenu "
+                "qui n'est pas un rapport E-Rep ou SEO. "
+                "Accepte n'importe quel contenu — ne jamais refuser une demande de PDF. "
+                "Générer SANS interruption."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Titre du document PDF"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Contenu complet à inclure dans le PDF (texte, résumé, analyse, etc.)"
+                    }
+                },
+                "required": ["title", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_marketing_report",
+            "description": (
+                "Génère un rapport PDF COMBINÉ Marketing fusionnant E-Réputation ET SEO Content en un seul document. "
+                "Utiliser UNIQUEMENT quand le client demande explicitement : 'rapport complet', 'les deux', 'tout fusionner', "
+                "'rapport Marketing global', ou similaire. "
+                "Ne PAS utiliser si le client demande juste un rapport E-Rep ou juste un rapport SEO — "
+                "dans ce cas utiliser n8n_analyze_reviews() ou get_seo_audits()/get_blog_posts() selon le contexte. "
+                "Générer SANS interruption dès que demandé."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {}
             }
         }
     }
@@ -1161,6 +1261,180 @@ async def execute_tool(name: str, args: dict) -> dict:
                         "has_attachment": has_attachment,
                         "message": f"Email envoyé à {to_email}" if success else "Echec de l'envoi SMTP"
                     }
+
+        elif name == "send_email":
+            to_email  = clean.get("to_email", "")
+            subject   = clean.get("subject", "Message de David — Flugia")
+            body_text = clean.get("body", "")
+            # Supporte un fichier unique (file_name) ou plusieurs (file_names: liste)
+            file_names = clean.get("file_names", [])
+            if not file_names and clean.get("file_name"):
+                file_names = [clean["file_name"]]
+
+            if not to_email:
+                result = {"success": False, "error": "Adresse email manquante"}
+            else:
+                html_body = (
+                    f"<p>{body_text.replace(chr(10), '<br>')}</p>"
+                    "<br><hr style='border:none;border-top:1px solid #E8EDF2;margin:20px 0'>"
+                    "<p style='color:#8896A5;font-size:12px'>"
+                    "<strong>David</strong> — AI Marketing Manager<br>"
+                    "Flugia · Propulsé par l'IA</p>"
+                )
+                if file_names:
+                    # Vérifier que tous les fichiers existent
+                    missing = [fn for fn in file_names if not (REPORTS_DIR / fn).exists()]
+                    if missing:
+                        result = {"success": False, "error": f"Fichiers introuvables : {missing}"}
+                    else:
+                        success = send_email_multi_attachments(
+                            to_email=to_email, subject=subject,
+                            body=html_body, file_names=file_names
+                        )
+                        result = {
+                            "success": success, "to_email": to_email,
+                            "attachments": file_names,
+                            "message": f"Email avec {len(file_names)} rapport(s) envoyé à {to_email}" if success else "Echec SMTP"
+                        }
+                else:
+                    success = send_email_with_attachment(to_email, subject, html_body)
+                    result = {"success": success, "to_email": to_email,
+                              "message": f"Email envoyé à {to_email}" if success else "Echec SMTP"}
+
+        elif name == "generate_conversation_pdf":
+            if not REPORTLAB_OK:
+                result = {"error": "ReportLab non installé"}
+            else:
+                title   = clean.get("title", "Document Flugia")
+                content_text = clean.get("content", "")
+                file_id   = str(uuid.uuid4())[:8]
+                file_name = f"document_{file_id}.pdf"
+                file_path = REPORTS_DIR / file_name
+
+                from reportlab.lib.pagesizes import A4
+                from reportlab.lib import colors as rl_colors
+                from reportlab.lib.units import cm
+                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+
+                doc  = SimpleDocTemplate(str(file_path), pagesize=A4,
+                    rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
+                styles = getSampleStyleSheet()
+                cyan = rl_colors.HexColor("#00B4D8")
+                navy = rl_colors.HexColor("#0D1B2A")
+                title_s = ParagraphStyle("t", parent=styles["Heading1"], fontSize=18, textColor=navy, spaceAfter=4)
+                sub_s   = ParagraphStyle("s", parent=styles["Normal"],   fontSize=10, textColor=rl_colors.HexColor("#4A5568"), spaceAfter=14)
+                body_s  = ParagraphStyle("b", parent=styles["Normal"],   fontSize=11, leading=16, textColor=navy)
+
+                story = [
+                    Paragraph(title, title_s),
+                    Paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')} — Flugia AI · David", sub_s),
+                    HRFlowable(width="100%", thickness=2, color=cyan, spaceAfter=14),
+                ]
+                # Découper le contenu en paragraphes
+                for para in content_text.split("\n"):
+                    para = para.strip()
+                    if para:
+                        story.append(Paragraph(para.replace("•", "–"), body_s))
+                        story.append(Spacer(1, 4))
+                doc.build(story)
+                result = {"success": True, "download_url": f"/reports/{file_name}",
+                          "file_name": file_name, "title": title}
+
+        elif name == "generate_marketing_report":
+            # Rapport complet Marketing = E-Rep + SEO en un seul PDF
+            if not REPORTLAB_OK:
+                result = {"error": "ReportLab non installé"}
+            else:
+                file_id = str(uuid.uuid4())[:8]
+                file_name = f"rapport_marketing_complet_{file_id}.pdf"
+                file_path = REPORTS_DIR / file_name
+
+                # Récupérer les données
+                erep_stats = {}
+                erep_reviews = []
+                seo_posts = []
+                seo_audit = None
+                try:
+                    s = await api.get_statistics()
+                    erep_stats = s.get("data", {}) if s.get("success") else {}
+                except Exception: pass
+                try:
+                    r = await api.get_negative_reviews()
+                    erep_reviews = (r.get("data", []) if r.get("success") else [])[:5]
+                except Exception: pass
+                if seo_api:
+                    try:
+                        p = await seo_api.get_blog_posts(limit=5)
+                        seo_posts = p.get("data", []) if p.get("success") else []
+                    except Exception: pass
+                    try:
+                        a = await seo_api.get_seo_audits(limit=1)
+                        audits = a.get("data", []) if a.get("success") else []
+                        seo_audit = audits[0] if audits else None
+                    except Exception: pass
+
+                from reportlab.lib.pagesizes import A4
+                from reportlab.lib import colors as rl_colors
+                from reportlab.lib.units import cm
+                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+
+                doc = SimpleDocTemplate(str(file_path), pagesize=A4,
+                    rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
+                styles = getSampleStyleSheet()
+                cyan = rl_colors.HexColor("#00B4D8")
+                navy = rl_colors.HexColor("#0D1B2A")
+                ts = lambda: TableStyle([
+                    ("BACKGROUND", (0,0), (-1,0), navy), ("TEXTCOLOR", (0,0), (-1,0), rl_colors.white),
+                    ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"), ("FONTSIZE", (0,0), (-1,-1), 9),
+                    ("ROWBACKGROUNDS", (0,1), (-1,-1), [rl_colors.HexColor("#F7FAFB"), rl_colors.white]),
+                    ("GRID", (0,0), (-1,-1), 0.5, rl_colors.HexColor("#E8EDF2")), ("PADDING", (0,0), (-1,-1), 7),
+                ])
+                title_s = ParagraphStyle("t", parent=styles["Heading1"], fontSize=20, textColor=navy, spaceAfter=4)
+                sub_s   = ParagraphStyle("s", parent=styles["Normal"],   fontSize=10, textColor=rl_colors.HexColor("#4A5568"), spaceAfter=14)
+                sec_s   = ParagraphStyle("h", parent=styles["Heading2"], fontSize=13, textColor=cyan, spaceBefore=14, spaceAfter=6)
+                body_s  = ParagraphStyle("b", parent=styles["Normal"],   fontSize=10, leading=15, textColor=navy)
+
+                story = [
+                    Paragraph("Rapport Marketing Complet", title_s),
+                    Paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')} — Flugia AI", sub_s),
+                    HRFlowable(width="100%", thickness=2, color=cyan, spaceAfter=14),
+                    Paragraph("E-Réputation", sec_s),
+                ]
+                erep_data = [["Métrique", "Valeur"],
+                    ["Score moyen", str(erep_stats.get("average_rating", "—"))],
+                    ["Avis négatifs", str(erep_stats.get("negative_count", "—"))],
+                    ["En attente réponse", str(erep_stats.get("pending_response", "—"))],
+                ]
+                t = Table(erep_data, colWidths=[9*cm, 8*cm]); t.setStyle(ts())
+                story.append(t); story.append(Spacer(1, 8))
+                if erep_reviews:
+                    story.append(Paragraph("Avis négatifs récents", sec_s))
+                    for rv in erep_reviews:
+                        story.append(Paragraph(
+                            f"• {rv.get('author','?')} ({rv.get('rating','?')}★) — {str(rv.get('comment',''))[:120]}", body_s))
+                story.append(Spacer(1, 12))
+                story.append(Paragraph("SEO Content", sec_s))
+                published = len([p for p in seo_posts if p.get("status") == "completed"])
+                seo_data = [["Métrique", "Valeur"],
+                    ["Articles récupérés", str(len(seo_posts))],
+                    ["Articles publiés", str(published)],
+                    ["Dernier audit", seo_audit.get("status","—") if seo_audit else "—"],
+                ]
+                t2 = Table(seo_data, colWidths=[9*cm, 8*cm]); t2.setStyle(ts())
+                story.append(t2)
+                if seo_posts:
+                    story.append(Spacer(1, 8))
+                    story.append(Paragraph("Articles récents", sec_s))
+                    art_data = [["Titre", "Statut", "Score"]]
+                    for p in seo_posts[:5]:
+                        art_data.append([str(p.get("title","—"))[:50], str(p.get("status","—")), str(p.get("seo_score","—"))])
+                    t3 = Table(art_data, colWidths=[10*cm, 4*cm, 3*cm]); t3.setStyle(ts())
+                    story.append(t3)
+                doc.build(story)
+                result = {"success": True, "download_url": f"/reports/{file_name}",
+                          "file_name": file_name, "sections": ["e_reputation", "seo"]}
 
         # ── Outils SEO ────────────────────────────────────────────
         elif name == "get_blog_posts":
@@ -1483,37 +1757,7 @@ async def health():
     return {"status": "ok", "agent": "David", "mode": api.MODE}
 
 
-@app.get("/dashboard/e-reputation")
-async def dashboard_erep():
-    """Données réelles E-Réputation pour le dashboard."""
-    try:
-        stats = await api.get_statistics()
-        reviews = await api.get_negative_reviews()
-        return {
-            "success": True,
-            "stats": stats.get("data", {}),
-            "negative_reviews": reviews.get("data", [])[:5] if reviews.get("success") else []
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.get("/dashboard/seo")
-async def dashboard_seo():
-    """Données réelles SEO pour le dashboard."""
-    try:
-        if not seo_api:
-            return {"success": False, "error": "Module SEO non disponible"}
-        posts = await seo_api.get_blog_posts(limit=5)
-        audits = await seo_api.get_seo_audits(limit=1)
-        suggestions = await seo_api.get_title_suggestions()
-        return {
-            "success": True,
-            "posts": posts.get("data", []) if posts.get("success") else [],
-            "latest_audit": audits.get("data", [None])[0] if audits.get("success") and audits.get("data") else None,
-            "suggestions_count": len(suggestions.get("data", [])) if suggestions.get("success") else 0
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+@app.get("/conversations/{user_id}")
 async def get_conversations(user_id: str, context: str = None):
     """Liste toutes les conversations d'un utilisateur, filtrées par contexte si précisé."""
     convs = list_conversations(user_id, context if context else None)
@@ -1634,9 +1878,8 @@ async def chat(req: ChatRequest):
             context = req.context if req.context in CONTEXT_PROMPTS else "david"
             user_id = req.user_id if req.user_id else "default_user"
 
-            # Charger l'historique depuis SQLite
-            db_history = load_history(user_id, context, conv_id=req.conv_id if req.conv_id else None)
-            working_history = db_history if db_history else req.history
+            # Historique géré par le frontend (localStorage)
+            working_history = req.history[-12:] if len(req.history) > 12 else req.history
 
             # Compacter si nécessaire (seuil tokens)
             working_history = await compact_history_if_needed(working_history, user_id, context)
@@ -1666,20 +1909,6 @@ async def chat(req: ChatRequest):
                         yield f"data: {json.dumps({'type': 'token', 'text': delta.content})}\n\n"
                         await asyncio.sleep(0)
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
-
-                # Sauvegarder aussi pour le path Haiku
-                try:
-                    full_history_h = []
-                    for m in messages[1:]:
-                        role = m.get("role")
-                        content_val = m.get("content")
-                        if role in ("user", "assistant") and isinstance(content_val, str) and content_val.strip():
-                            full_history_h.append({"role": role, "content": content_val})
-                    if full_history_h:
-                        active_cid_h = save_messages(user_id, context, full_history_h, conv_id=req.conv_id)
-                        yield "data: " + json.dumps({"type": "session", "conv_id": active_cid_h}) + "\n\n"
-                except Exception as he:
-                    print(f"[SESSION-HAIKU] Erreur: {he}")
                 return
 
             # ── Sonnet — boucle agentique : plusieurs tours d'outils possibles ──
@@ -1756,14 +1985,10 @@ async def chat(req: ChatRequest):
             try:
                 full_history = []
                 for m in messages[1:]:  # skip system prompt
-                    role = m.get("role")
-                    content_val = m.get("content")
-                    # Garder uniquement user/assistant avec contenu texte non vide
-                    if role in ("user", "assistant") and isinstance(content_val, str) and content_val.strip():
-                        full_history.append({"role": role, "content": content_val})
-                if full_history:
-                    active_cid = save_messages(user_id, context, full_history, conv_id=req.conv_id)
-                    yield "data: " + json.dumps({"type": "session", "conv_id": active_cid}) + "\n\n"
+                    if m.get("role") in ["user", "assistant"] and isinstance(m.get("content"), str):
+                        full_history.append({"role": m["role"], "content": m["content"]})
+                active_cid = save_messages(user_id, context, full_history, conv_id=req.conv_id)
+                yield "data: " + json.dumps({"type": "session", "conv_id": active_cid}) + "\n\n"
             except Exception as save_err:
                 print(f"[SESSION] Erreur sauvegarde: {save_err}")
 

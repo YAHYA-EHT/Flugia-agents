@@ -6,9 +6,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { HandoffPanel, detectHandoff } from "@/components/shared/HandoffPanel";
 
-// ── Types ─────────────────────────────────────────────────────
 type Role = "user" | "assistant";
-type DavidContext = "david" | "e_reputation" | "seo" | "linkedin";
+type EmilyContext = "emily" | "chatbot" | "agent_call";
 
 interface Message {
   id: string;
@@ -22,49 +21,41 @@ interface Message {
 
 interface Conversation {
   id: string;
-  context: DavidContext;
+  context: EmilyContext;
   title: string;
   updatedAt: string;
   messages: { role: Role; content: string }[];
 }
 
-// ── Config ────────────────────────────────────────────────────
-const API = "http://localhost:8000";
-const STORAGE_KEY = "flugia_conversations_v2";
+const API = "http://localhost:8001";
+const STORAGE_KEY = "flugia_emily_conversations_v1";
 
-const CTX_CONFIG: Record<DavidContext, { label: string; welcome: string; chips: [string, string][] }> = {
-  david:        { label: "Marketing",    welcome: "Salut ! Je suis là pour tout ce qui touche au marketing.", chips: [["Score réputation", "Quel est mon score de réputation ?"], ["Avis négatifs", "Montre-moi mes avis négatifs"], ["Post LinkedIn", "Crée-moi un post LinkedIn"], ["Article SEO", "Génère un article SEO"]] },
-  e_reputation: { label: "E-Réputation", welcome: "Dans l'espace E-Réputation. On analyse les avis ou on génère des réponses ?", chips: [["Mon score", "Quel est mon score global ?"], ["Avis négatifs", "Montre mes avis négatifs"], ["Analyser", "Lance une analyse complète"], ["Synchroniser", "Synchronise mes avis Google"]] },
-  seo:          { label: "SEO Content",  welcome: "Dans l'espace SEO. On crée ou on audite aujourd'hui ?", chips: [["Articles", "Montre-moi mes articles"], ["Audit", "Mon dernier audit SEO"], ["Suggestions", "Mes suggestions de titres"], ["Nouvel article", "Génère un article SEO"]] },
-  linkedin:     { label: "LinkedIn",     welcome: "Dans l'espace LinkedIn. On publie ou on planifie ?", chips: [["Créer un post", "Crée-moi un post LinkedIn"], ["Planifier", "Planifie des posts pour la semaine"], ["Stratégie", "Comment améliorer ma présence LinkedIn ?"]] },
+const CTX_CONFIG: Record<EmilyContext, { label: string; welcome: string; chips: [string, string][] }> = {
+  emily:      { label: "Support",     welcome: "Salut ! Je gère tout ce qui touche au support client — chatbots et agents vocaux. Qu'est-ce qu'on regarde ?", chips: [["Nos chatbots", "Montre-moi nos chatbots"], ["Nos appels", "Comment se passent nos appels ?"], ["Tâches urgentes", "Y a-t-il des tâches urgentes ?"], ["Balance minutes", "Combien de minutes il nous reste ?"]] },
+  chatbot:    { label: "Chatbot",     welcome: "Dans l'espace Chatbot. On analyse les performances ou on configure un bot ?", chips: [["Nos chatbots", "Montre-moi nos chatbots"], ["Performances", "Stats de nos chatbots cette semaine"], ["Notifications", "Nouvelles notifications chatbot ?"], ["Historique", "Historique des conversations"]] },
+  agent_call: { label: "Agent Call",  welcome: "Dans l'espace Agent Call. On regarde les appels ou les agents ?", chips: [["Dashboard appels", "Montre-moi le dashboard des appels"], ["Appels manqués", "Y a-t-il des appels manqués ?"], ["Transcriptions", "Dernières transcriptions d'appels"], ["Balance", "Combien de minutes il nous reste ?"]] },
 };
 
 // ── localStorage helpers ──────────────────────────────────────
 function loadAllConvs(): Conversation[] {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]"); } catch { return []; }
 }
-
 function saveAllConvs(convs: Conversation[]) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(convs)); } catch {}
 }
-
-function getConvsByContext(ctx: DavidContext): Conversation[] {
+function getConvsByContext(ctx: EmilyContext): Conversation[] {
   return loadAllConvs().filter(c => c.context === ctx).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
-
 function upsertConv(conv: Conversation) {
-  const all = loadAllConvs().filter(c => c.id !== conv.id);
-  saveAllConvs([conv, ...all]);
+  saveAllConvs([conv, ...loadAllConvs().filter(c => c.id !== conv.id)]);
 }
-
 function deleteConvById(id: string) {
   saveAllConvs(loadAllConvs().filter(c => c.id !== id));
 }
-
-function newConvId() { return `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`; }
+function newConvId() { return `ec_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`; }
 
 let seq = 0;
-const uid = () => `m${++seq}_${Date.now()}`;
+const uid = () => `em${++seq}_${Date.now()}`;
 
 function relTime(iso: string) {
   const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
@@ -89,11 +80,12 @@ function ConversationsPanel({ convs, activeId, open, onToggle, onNew, onSelect, 
   onSelect: (c: Conversation) => void; onDelete: (id: string) => void;
 }) {
   const groups = groupConvs(convs);
+  const EMILY_COLOR = "#4cc9f0";
   return (
     <aside className={`relative hidden shrink-0 flex-col overflow-hidden border-r border-gray-100 bg-gray-50/60 transition-[width] duration-300 md:flex ${open ? "w-64" : "w-12"}`}>
       <div className={`absolute inset-0 flex flex-col items-center gap-2 py-3 transition-opacity ${open ? "pointer-events-none opacity-0" : "opacity-100 delay-150"}`}>
-        <button onClick={onToggle} className="flex h-9 w-9 items-center justify-center rounded-lg bg-white shadow-sm text-slate-500 hover:text-[#4cc9f0]"><MessagesSquare className="h-4 w-4" /></button>
-        <button onClick={onNew} className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#4cc9f0] text-white hover:opacity-90"><Plus className="h-4 w-4" /></button>
+        <button onClick={onToggle} className="flex h-9 w-9 items-center justify-center rounded-lg bg-white shadow-sm text-slate-500 hover:text-cyan-400"><MessagesSquare className="h-4 w-4" /></button>
+        <button onClick={onNew} className="flex h-8 w-8 items-center justify-center rounded-lg text-white hover:opacity-90" style={{ background: EMILY_COLOR }}><Plus className="h-4 w-4" /></button>
       </div>
       <div className={`absolute inset-0 flex min-w-64 flex-col transition-opacity ${open ? "opacity-100 delay-150" : "pointer-events-none opacity-0"}`}>
         <div className="flex items-center justify-between border-b border-gray-100 px-3 py-3">
@@ -101,7 +93,7 @@ function ConversationsPanel({ convs, activeId, open, onToggle, onNew, onSelect, 
             <button onClick={onToggle} className="flex h-6 w-6 items-center justify-center rounded text-slate-400 hover:bg-gray-100"><PanelLeftClose className="h-4 w-4" /></button>
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Conversations</span>
           </div>
-          <button onClick={onNew} className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#4cc9f0] text-white hover:opacity-90"><Plus className="h-4 w-4" /></button>
+          <button onClick={onNew} className="flex h-7 w-7 items-center justify-center rounded-lg text-white hover:opacity-90" style={{ background: EMILY_COLOR }}><Plus className="h-4 w-4" /></button>
         </div>
         <div className="flex-1 overflow-y-auto pb-3">
           {convs.length === 0 ? (
@@ -117,10 +109,11 @@ function ConversationsPanel({ convs, activeId, open, onToggle, onNew, onSelect, 
                 const active = c.id === activeId;
                 return (
                   <div key={c.id} onClick={() => onSelect(c)}
-                    className={`group mx-2 mb-0.5 flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 transition ${active ? "bg-[#4cc9f0]/10 ring-1 ring-[#4cc9f0]/20" : "hover:bg-white"}`}>
-                    <MessageSquare className={`h-3.5 w-3.5 shrink-0 ${active ? "text-[#4cc9f0]" : "text-slate-300"}`} />
+                    className={`group mx-2 mb-0.5 flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 transition ${active ? "ring-1" : "hover:bg-white"}`}
+                    style={active ? { backgroundColor: `${EMILY_COLOR}15`, ringColor: `${EMILY_COLOR}30` } : {}}>
+                    <MessageSquare className="h-3.5 w-3.5 shrink-0" style={{ color: active ? EMILY_COLOR : "#cbd5e1" }} />
                     <div className="min-w-0 flex-1">
-                      <p className={`truncate text-[12px] font-medium ${active ? "text-[#4cc9f0]" : "text-slate-700"}`}>{c.title}</p>
+                      <p className="truncate text-[12px] font-medium" style={{ color: active ? EMILY_COLOR : "#374151" }}>{c.title}</p>
                       <p className="text-[10px] text-slate-400">{relTime(c.updatedAt)}</p>
                     </div>
                     <button onClick={e => { e.stopPropagation(); onDelete(c.id); }}
@@ -141,22 +134,24 @@ function ConversationsPanel({ convs, activeId, open, onToggle, onNew, onSelect, 
 // ── Bubble ────────────────────────────────────────────────────
 function Bubble({ msg }: { msg: Message }) {
   const isUser = msg.role === "user";
+  const EMILY_GRADIENT = "linear-gradient(135deg, #4cc9f0, #0096C7)";
   return (
     <div className={`flex items-start gap-2.5 px-4 py-1.5 ${isUser ? "justify-end" : "justify-start"}`}>
       {!isUser && (
-        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#4cc9f0] to-[#4361ee] text-xs font-black text-white">D</div>
+        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-black text-white" style={{ background: "linear-gradient(135deg, #4cc9f0, #0096C7)" }}>E</div>
       )}
       <div className={`flex max-w-[78%] flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
         {msg.tools && msg.tools.length > 0 && (
           <div className="flex flex-wrap gap-1 mb-1">
             {msg.tools.map(t => (
-              <span key={t} className="inline-flex items-center gap-1 rounded-full bg-[#4cc9f0]/10 px-2 py-0.5 text-[10px] font-medium text-[#4cc9f0] ring-1 ring-[#4cc9f0]/20">
-                <span className="h-1 w-1 rounded-full bg-[#4cc9f0]" />{t}
+              <span key={t} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1" style={{ background: "#4cc9f015", color: "#4cc9f0", ringColor: "#4cc9f030" }}>
+                <span className="h-1 w-1 rounded-full" style={{ background: "#4cc9f0" }} />{t}
               </span>
             ))}
           </div>
         )}
-        <div className={`rounded-2xl px-4 py-2.5 text-[14px] leading-relaxed ${isUser ? "bg-[#4361ee] text-white rounded-tr-sm" : "bg-white text-slate-900 shadow-sm ring-1 ring-slate-100 rounded-tl-sm"}`}>
+        <div className={`rounded-2xl px-4 py-2.5 text-[14px] leading-relaxed ${isUser ? "text-white rounded-tr-sm" : "bg-white text-slate-900 shadow-sm ring-1 ring-slate-100 rounded-tl-sm"}`}
+          style={isUser ? { background: EMILY_GRADIENT } : {}}>
           {msg.pending ? (
             msg.content ? (
               <><span className="md-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown></span><span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-slate-400" /></>
@@ -188,8 +183,11 @@ function Bubble({ msg }: { msg: Message }) {
     </div>
   );
 }
-export function DavidChatScreen({ context }: { context: DavidContext }) {
+
+// ── Main ──────────────────────────────────────────────────────
+export function EmilyChatScreen({ context }: { context: EmilyContext }) {
   const cfg = CTX_CONFIG[context];
+  const EMILY_COLOR = "#4cc9f0";
 
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [convId, setConvId] = useState<string | null>(null);
@@ -202,7 +200,6 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const xhrRef = useRef<XMLHttpRequest | null>(null);
-  // Keep a mutable ref to current messages for saving after XHR completes
   const msgsRef = useRef<Message[]>([]);
   const convIdRef = useRef<string | null>(null);
 
@@ -214,7 +211,6 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
     setConvs(getConvsByContext(context));
   }, [context]);
 
-  // Init: load conversations from localStorage and open latest
   useEffect(() => {
     xhrRef.current?.abort();
     setBusy(false);
@@ -275,13 +271,11 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
     const userMsg: Message = { id: uid(), role: "user", content: trimmed };
     const aId = uid();
     const aMsg: Message = { id: aId, role: "assistant", content: "", pending: true };
-
     const newMsgs = [...msgsRef.current, userMsg, aMsg];
     setMsgs(newMsgs);
     msgsRef.current = newMsgs;
     scrollToBottom();
 
-    // History to send = all previous messages (no pending)
     const history = msgsRef.current
       .filter(m => !m.pending && m.id !== aId)
       .map(m => ({ role: m.role, content: m.content }));
@@ -291,37 +285,26 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
     let capturedFileName = "";
     const tools: string[] = [];
 
-    const patch = (upd: Partial<Message>) => {
+    const patch = (upd: Partial<Message>) =>
       setMsgs(prev => {
         const updated = prev.map(m => m.id === aId ? { ...m, ...upd } : m);
         msgsRef.current = updated;
         return updated;
       });
-    };
 
     const saveConversation = (finalContent: string) => {
-      // Build the final messages list (replace pending assistant with final)
       const finalMsgs = msgsRef.current
         .filter(m => !m.pending)
         .map(m => ({ role: m.role, content: m.content }));
-
-      // If assistant message exists but wasn't finalized yet, add it
-      const hasAssistant = finalMsgs.some((m, i) => i === finalMsgs.length - 1 && m.role === "assistant" && m.content === finalContent);
-      const toSave = hasAssistant ? finalMsgs : [...finalMsgs.filter(m => m.content !== "" || m.role === "user")];
-
       const cid = convIdRef.current ?? newConvId();
       convIdRef.current = cid;
       setConvId(cid);
-
-      const title = trimmed.slice(0, 55) + (trimmed.length > 55 ? "…" : "");
-      const conv: Conversation = {
-        id: cid,
-        context,
-        title,
+      upsertConv({
+        id: cid, context,
+        title: trimmed.slice(0, 55) + (trimmed.length > 55 ? "…" : ""),
         updatedAt: new Date().toISOString(),
-        messages: toSave,
-      };
-      upsertConv(conv);
+        messages: finalMsgs,
+      });
       refreshConvs();
     };
 
@@ -332,8 +315,7 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
     xhr.onprogress = () => {
       const chunk = xhr.responseText.slice(processed);
       processed = xhr.responseText.length;
-      const lines = chunk.split("\n");
-      for (const line of lines) {
+      for (const line of chunk.split("\n")) {
         const t = line.trim();
         if (!t.startsWith("data:")) continue;
         const raw = t.slice(5).trim();
@@ -349,9 +331,8 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
             case "tool_end":
               tools.push(evt.tool ?? "");
               patch({ tools: [...tools] });
-              // Capturer le lien de téléchargement PDF si présent
               if (evt.data?.download_url) {
-                capturedDownloadUrl = `http://localhost:8000${evt.data.download_url}`;
+                capturedDownloadUrl = `http://localhost:8001${evt.data.download_url}`;
                 capturedFileName = evt.data.file_name ?? "rapport.pdf";
                 patch({ downloadUrl: capturedDownloadUrl, fileName: capturedFileName });
               }
@@ -365,70 +346,51 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
     };
 
     xhr.onload = () => {
-      // Finalize assistant message
       const finalContent = accumulated || "…";
-      patch({ content: finalContent, pending: false });
-
-      // Update msgsRef with the final state
       const finalized = msgsRef.current.map(m =>
-        m.id === aId ? { ...m, content: finalContent, pending: false } : m
+        m.id === aId
+          ? { ...m, content: finalContent, pending: false,
+              ...(capturedDownloadUrl ? { downloadUrl: capturedDownloadUrl, fileName: capturedFileName } : {}) }
+          : m
       );
       msgsRef.current = finalized;
       setMsgs(finalized);
-
-      // Save to localStorage
       saveConversation(finalContent);
-
       // Detect handoff
-      const target = detectHandoff(finalContent, "david");
+      const target = detectHandoff(finalContent, "emily");
       if (target) setTimeout(() => setHandoffTarget(target), 800);
-
       setBusy(false);
       scrollToBottom();
     };
 
-    xhr.onerror = () => {
-      patch({ content: "Impossible de joindre le serveur.", pending: false });
-      setBusy(false);
-    };
-
+    xhr.onerror = () => { patch({ content: "Impossible de joindre le serveur Emily.", pending: false }); setBusy(false); };
     xhr.onabort = () => { setBusy(false); };
 
     xhr.open("POST", `${API}/chat`, true);
     xhr.setRequestHeader("Content-Type", "application/json");
-    xhr.send(JSON.stringify({
-      message: trimmed,
-      history,
-      context,
-      user_id: "flugia_user",
-      conv_id: null,
-    }));
+    xhr.send(JSON.stringify({ message: trimmed, history, context, user_id: "flugia_user" }));
   }, [busy, context, scrollToBottom, refreshConvs]);
-
-  const showWelcome = msgs.length === 0;
 
   return (
     <div className="flex h-full min-h-0">
       <ConversationsPanel
         convs={convs} activeId={convId} open={panelOpen}
         onToggle={() => setPanelOpen(v => !v)}
-        onNew={newConv}
-        onSelect={selectConv}
+        onNew={newConv} onSelect={selectConv}
         onDelete={id => setDeleteTarget(id)}
       />
-
       <div className="flex h-full min-h-0 flex-1 flex-col">
         <div className="flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl py-6">
-            {showWelcome ? (
+            {msgs.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
-                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#4cc9f0] to-[#4361ee] text-xl font-black text-white shadow-lg">D</div>
-                <h2 className="mt-4 text-lg font-black text-slate-900">David — {cfg.label}</h2>
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl text-xl font-black text-white shadow-lg" style={{ background: "linear-gradient(135deg, #4cc9f0, #0096C7)" }}>E</div>
+                <h2 className="mt-4 text-lg font-black text-slate-900">Emily — {cfg.label}</h2>
                 <p className="mt-1 text-sm text-slate-400">{cfg.welcome}</p>
                 <div className="mt-5 flex flex-wrap justify-center gap-2">
                   {cfg.chips.map(([label, msg]) => (
                     <button key={label} onClick={() => send(msg)}
-                      className="rounded-full border border-slate-200 px-3.5 py-1.5 text-sm text-slate-600 transition hover:border-[#4cc9f0]/40 hover:bg-[#4cc9f0]/5">
+                      className="rounded-full border border-slate-200 px-3.5 py-1.5 text-sm text-slate-600 transition hover:border-cyan-200 hover:bg-cyan-50">
                       {label}
                     </button>
                   ))}
@@ -438,16 +400,16 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
             <div ref={bottomRef} />
           </div>
         </div>
-
         <div className="border-t border-slate-100">
           <div className="mx-auto w-full max-w-3xl px-4 py-3">
-            <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm focus-within:border-[#4cc9f0] focus-within:ring-2 focus-within:ring-[#4cc9f0]/20 transition">
+            <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm transition focus-within:border-cyan-400 focus-within:ring-2 focus-within:ring-cyan-100">
               <textarea value={text} onChange={e => setText(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(text); } }}
-                rows={1} placeholder="Posez une question à David…"
+                rows={1} placeholder="Posez une question à Emily…"
                 className="max-h-36 flex-1 resize-none bg-transparent py-1.5 text-[14px] outline-none" />
               <button onClick={() => send(text)} disabled={busy || !text.trim()}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#4361ee] text-white transition hover:bg-[#3a52d6] disabled:opacity-40">
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-white transition hover:opacity-90 disabled:opacity-40"
+                style={{ background: "linear-gradient(135deg, #4cc9f0, #0096C7)" }}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
               </button>
             </div>
@@ -455,7 +417,6 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
           </div>
         </div>
       </div>
-
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="w-80 rounded-2xl bg-white p-6 shadow-xl">
@@ -464,16 +425,15 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
             <div className="mt-4 flex gap-3">
               <button onClick={() => setDeleteTarget(null)} className="flex-1 rounded-xl border py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Annuler</button>
               <button onClick={() => { deleteConv(deleteTarget); setDeleteTarget(null); }}
-                className="flex-1 rounded-xl bg-red-500 py-2 text-sm font-medium text-white hover:bg-red-600">Supprimer</button>
+                className="flex-1 rounded-xl py-2 text-sm font-medium text-white hover:opacity-90" style={{ background: "#ef4444" }}>Supprimer</button>
             </div>
           </div>
         </div>
       )}
-
       <HandoffPanel
         targetAgent={handoffTarget}
         onDismiss={() => setHandoffTarget(null)}
-        currentAgentName="David"
+        currentAgentName="Emily"
       />
     </div>
   );

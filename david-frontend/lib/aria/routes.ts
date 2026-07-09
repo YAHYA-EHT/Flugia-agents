@@ -16,11 +16,18 @@ export const FEATURE_SLUG = "executive-assistant";
 export type MainView = "dashboard" | "dept" | "vs" | "agent";
 export type AgentId  = "marketing" | "sales" | "support" | "global" | "hr" | "legal" | "technology" | "product" | "strategy";
 export type MarketingFeature = "overview" | "e_reputation" | "seo" | "linkedin";
+export type SupportFeature   = "overview" | "chatbot" | "agent_call";
 
 const VALID_PAGES: AriaPage[] = [
   "overview", "assistant", "agent", "autonomy", "rules", "agenda", "notifications",
   "email-accounts", "knowledge-bases", "whatsapp",
 ];
+
+const SUPPORT_FEATURE_MAP: Record<string, SupportFeature> = {
+  "chatbot":    "chatbot",
+  "agent-call": "agent_call",
+  "call-agent": "agent_call",
+};
 
 const MARKETING_FEATURE_MAP: Record<string, MarketingFeature> = {
   "e-reputation": "e_reputation",
@@ -45,31 +52,38 @@ export function parseRoute(pathname: string): {
   page: AriaPage;
   agentId: AgentId | null;
   marketingFeature: MarketingFeature;
+  supportFeature: SupportFeature;
 } {
   const segs = pathname.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
   const rest  = segs[0] === "dashboard" ? segs.slice(1) : segs;
 
   if (rest.length === 0)
-    return { mainView: "dashboard", page: "overview", agentId: null, marketingFeature: "overview" };
+    return { mainView: "dashboard", page: "overview", agentId: null, marketingFeature: "overview", supportFeature: "overview" };
 
   // Aria — bureau/executive-assistant/...
   if (rest[0] === DEPT_SLUG && !rest[1])
-    return { mainView: "dept", page: "overview", agentId: null, marketingFeature: "overview" };
+    return { mainView: "dept", page: "overview", agentId: null, marketingFeature: "overview", supportFeature: "overview" };
   if (rest[0] === DEPT_SLUG && rest[1] === FEATURE_SLUG) {
     const p = rest[2] as AriaPage | undefined;
-    return { mainView: "vs", page: p && VALID_PAGES.includes(p) ? p : "overview", agentId: null, marketingFeature: "overview" };
+    return { mainView: "vs", page: p && VALID_PAGES.includes(p) ? p : "overview", agentId: null, marketingFeature: "overview", supportFeature: "overview" };
   }
 
   // Marketing sub-features
   if (rest[0] === "marketing") {
     const feature = rest[1] ? MARKETING_FEATURE_MAP[rest[1]] ?? "overview" : "overview";
-    return { mainView: "agent", page: "overview", agentId: "marketing", marketingFeature: feature };
+    return { mainView: "agent", page: "overview", agentId: "marketing", marketingFeature: feature, supportFeature: "overview" };
+  }
+
+  // Support sub-features
+  if (rest[0] === "support") {
+    const feature = rest[1] ? SUPPORT_FEATURE_MAP[rest[1]] ?? "overview" : "overview";
+    return { mainView: "agent", page: "overview", agentId: "support", marketingFeature: "overview", supportFeature: feature };
   }
 
   // Other agents
   const AGENT_IDS: AgentId[] = ["sales", "support", "global", "hr", "legal", "technology", "product", "strategy"];
   if (AGENT_IDS.includes(rest[0] as AgentId))
-    return { mainView: "agent", page: "overview", agentId: rest[0] as AgentId, marketingFeature: "overview" };
+    return { mainView: "agent", page: "overview", agentId: rest[0] as AgentId, marketingFeature: "overview", supportFeature: "overview" };
 
-  return { mainView: "dashboard", page: "overview", agentId: null, marketingFeature: "overview" };
+  return { mainView: "dashboard", page: "overview", agentId: null, marketingFeature: "overview", supportFeature: "overview" };
 }
