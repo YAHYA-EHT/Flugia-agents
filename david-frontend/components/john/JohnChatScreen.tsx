@@ -145,8 +145,8 @@ function Bubble({ msg }: { msg: Message }) {
       <div className={`flex max-w-[78%] flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
         {msg.tools && msg.tools.length > 0 && (
           <div className="flex flex-wrap gap-1 mb-1">
-            {msg.tools.map(t => (
-              <span key={t} className="inline-flex items-center gap-1 rounded-full bg-[#4cc9f0]/10 px-2 py-0.5 text-[10px] font-medium text-[#4cc9f0] ring-1 ring-[#4cc9f0]/20">
+            {msg.tools.map((t, i) => (
+              <span key={`${t}-${i}`} className="inline-flex items-center gap-1 rounded-full bg-[#4cc9f0]/10 px-2 py-0.5 text-[10px] font-medium text-[#4cc9f0] ring-1 ring-[#4cc9f0]/20">
                 <span className="h-1 w-1 rounded-full bg-[#4cc9f0]" />{t}
               </span>
             ))}
@@ -397,8 +397,8 @@ export function JohnChatScreen({ context }: { context: SalesContext }) {
           <div className="mx-auto w-full max-w-3xl py-6">
             {showWelcome ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
-                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#4cc9f0] to-[#4361ee] text-xl font-black text-white shadow-lg">D</div>
-                <h2 className="mt-4 text-lg font-black text-slate-900">David — {cfg.label}</h2>
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#4cc9f0] to-[#4361ee] text-xl font-black text-white shadow-lg">J</div>
+                <h2 className="mt-4 text-lg font-black text-slate-900">John — {cfg.label}</h2>
                 <p className="mt-1 text-sm text-slate-400">{cfg.welcome}</p>
                 <div className="mt-5 flex flex-wrap justify-center gap-2">
                   {cfg.chips.map(([label, msg]) => (
