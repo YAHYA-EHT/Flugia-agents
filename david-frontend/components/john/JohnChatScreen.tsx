@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { ArrowUp, Loader2, Plus, PanelLeftClose, MessagesSquare, MessageSquare, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { HandoffPanel, detectHandoff } from "@/components/shared/HandoffPanel";
 
 // ── Types ─────────────────────────────────────────────────────
 type Role = "user" | "assistant";
@@ -198,6 +199,7 @@ export function JohnChatScreen({ context }: { context: SalesContext }) {
   const [busy, setBusy] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [handoffTarget, setHandoffTarget] = useState<string | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const xhrRef = useRef<XMLHttpRequest | null>(null);
@@ -382,6 +384,11 @@ export function JohnChatScreen({ context }: { context: SalesContext }) {
 
       // Save to localStorage
       saveConversation(finalContent);
+
+      // Detect handoff
+      const target = detectHandoff(finalContent, "john");
+      if (target) setTimeout(() => setHandoffTarget(target), 800);
+
       setBusy(false);
       scrollToBottom();
     };
@@ -470,6 +477,12 @@ export function JohnChatScreen({ context }: { context: SalesContext }) {
           </div>
         </div>
       )}
+
+      <HandoffPanel
+        targetAgent={handoffTarget}
+        onDismiss={() => setHandoffTarget(null)}
+        currentAgentName="John"
+      />
     </div>
   );
 }
