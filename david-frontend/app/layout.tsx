@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "YAHYA",
+  title: "Flugia",
   description: "Flugia AI — Your intelligent business platform.",
 };
 
