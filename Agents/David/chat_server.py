@@ -997,6 +997,28 @@ TOOLS = [
                 "properties": {}
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "handoff_to_agent",
+            "description": (
+                "Redirige le client vers Emily (Support) avec un brief complet. "
+                "Utiliser quand le client demande quelque chose de Support "
+                "(chatbot, appel, transcription, agent vocal). "
+                "Appeler cet outil avec un résumé du contexte Marketing pour qu'Emily reprenne directement."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent": {"type": "string", "enum": ["emily"], "description": "Agent vers qui rediriger"},
+                    "client_request": {"type": "string", "description": "Ce que le client veut exactement"},
+                    "context_summary": {"type": "string", "description": "Résumé du contexte Marketing utile pour Emily"},
+                    "action_required": {"type": "string", "description": "Ce qu'Emily doit faire en premier"}
+                },
+                "required": ["agent", "client_request", "action_required"]
+            }
+        }
     }
 ]
 
@@ -1721,6 +1743,31 @@ async def execute_tool(name: str, args: dict) -> dict:
             else:
                 result = {"error": "Module SEO non disponible"}
 
+        elif name == "handoff_to_agent":
+            agent           = clean.get("agent", "emily")
+            client_request  = clean.get("client_request", "")
+            context_summary = clean.get("context_summary", "")
+            action_required = clean.get("action_required", "")
+            lines = [
+                "[CONTEXTE DAVID]",
+                "",
+                "Demande du client :",
+                client_request,
+            ]
+            if context_summary:
+                lines += ["", "Contexte (David) :", context_summary]
+            lines += [
+                "",
+                "Action immediate :",
+                action_required,
+            ]
+            result = {
+                "success": True,
+                "handoff": True,
+                "agent": agent,
+                "brief": "\n".join(lines),
+            }
+
         else:
             result = {"error": f"Outil inconnu: {name}"}
         return sanitize_for_json(result)
@@ -1953,6 +2000,8 @@ async def chat(req: ChatRequest):
                     result = await execute_tool(tool_name, tool_args)
 
                     yield f"data: {json.dumps({'type': 'tool_end', 'tool': tool_name, 'data': result})}\n\n"
+                    if result.get("handoff"):
+                        yield f"data: {json.dumps({'type': 'handoff', 'agent': result.get('agent'), 'brief': result.get('brief', '')})}\n\n"
                     await asyncio.sleep(0)
 
                     messages.append({

@@ -284,6 +284,7 @@ TOOLS_CHATBOT = [
     {"type":"function","function":{"name":"generate_conversation_pdf","description":"Génère un PDF de n'importe quel contenu — conversation, résumé, analyse, liste. Ne jamais refuser une demande de PDF. Générer SANS interruption.","parameters":{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"}},"required":["title","content"]}}},
     {"type":"function","function":{"name":"generate_support_report","description":"Génère un rapport PDF complet Support combinant Chatbots ET Agent Call. Générer SANS interruption dès que demandé.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"send_email","description":"Envoie un email avec signature Emily. Supporte plusieurs pièces jointes via file_names.","parameters":{"type":"object","properties":{"to_email":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"file_name":{"type":"string","default":""},"file_names":{"type":"array","items":{"type":"string"},"description":"Plusieurs PDFs en un email","default":[]}},"required":["to_email","subject","body"]}}},
+    {"type":"function","function":{"name":"handoff_to_agent","description":"Redirige le client vers David (Marketing) avec un brief complet. Utiliser quand le client demande quelque chose de Marketing (SEO, réputation, LinkedIn, article). Consulter les données disponibles puis appeler cet outil avec un brief riche.","parameters":{"type":"object","properties":{"agent":{"type":"string","enum":["david"],"description":"Agent vers qui rediriger"},"client_request":{"type":"string","description":"Ce que le client veut exactement"},"context_summary":{"type":"string","description":"Résumé du contexte Support utile pour David"},"action_required":{"type":"string","description":"Ce que David doit faire en premier"}},"required":["agent","client_request","action_required"]}}},
 ]
 
 TOOLS_AGENT_CALL = [
@@ -313,6 +314,7 @@ TOOLS_AGENT_CALL = [
     {"type":"function","function":{"name":"generate_call_report","description":"Génère un rapport PDF téléchargeable des appels (dashboard + ratings + appels récents)","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"generate_support_report","description":"Génère un rapport PDF complet Support combinant Chatbots ET Agent Call. Générer SANS interruption dès que demandé.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"send_email","description":"Envoie un email avec signature Emily. Supporte plusieurs pièces jointes via file_names.","parameters":{"type":"object","properties":{"to_email":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"file_name":{"type":"string","default":""},"file_names":{"type":"array","items":{"type":"string"},"description":"Plusieurs PDFs en un email","default":[]}},"required":["to_email","subject","body"]}}},
+    {"type":"function","function":{"name":"handoff_to_agent","description":"Redirige le client vers David (Marketing) avec un brief complet. Utiliser quand le client demande quelque chose de Marketing (SEO, réputation, LinkedIn, article). Consulter les données disponibles puis appeler cet outil avec un brief riche.","parameters":{"type":"object","properties":{"agent":{"type":"string","enum":["david"],"description":"Agent vers qui rediriger"},"client_request":{"type":"string","description":"Ce que le client veut exactement"},"context_summary":{"type":"string","description":"Résumé du contexte Support utile pour David"},"action_required":{"type":"string","description":"Ce que David doit faire en premier"}},"required":["agent","client_request","action_required"]}}},
 ]
 
 TOOLS_ALL = TOOLS_CHATBOT + [t for t in TOOLS_AGENT_CALL if t["function"]["name"] not in {t2["function"]["name"] for t2 in TOOLS_CHATBOT}]
@@ -452,11 +454,23 @@ async def execute_tool(name: str, args: dict) -> dict:
         elif name == "get_call_dashboard_ratings":
             result = await api.get_call_dashboard_ratings()
             if result.get("success") and result.get("data"):
-                avg = result["data"].get("average", 5)
-                if avg < 3:
-                    result["alert"] = f"CRITIQUE : satisfaction à {avg}/5 — en dessous du seuil critique de 3.0"
-                elif avg < 4:
-                    result["alert"] = f"ALERTE : satisfaction à {avg}/5 — en dessous du seuil recommandé de 4.0"
+                data = result["data"]
+                # L'API retourne une liste de ratings ou un dict
+                if isinstance(data, list):
+                    if data:
+                        avg = sum(r.get("rating", 0) for r in data) / len(data)
+                        result["average"] = round(avg, 1)
+                        result["total"]   = len(data)
+                        if avg < 3:
+                            result["alert"] = f"CRITIQUE : satisfaction à {avg:.1f}/5"
+                        elif avg < 4:
+                            result["alert"] = f"ALERTE : satisfaction à {avg:.1f}/5"
+                elif isinstance(data, dict):
+                    avg = data.get("average", 5)
+                    if avg < 3:
+                        result["alert"] = f"CRITIQUE : satisfaction à {avg}/5"
+                    elif avg < 4:
+                        result["alert"] = f"ALERTE : satisfaction à {avg}/5"
         elif name == "get_call_dashboard_calls":
             result = await api.get_call_dashboard_calls()
             if result.get("success") and result.get("data"):
@@ -684,6 +698,32 @@ async def execute_tool(name: str, args: dict) -> dict:
                     success = send_email_fn(to_email, subject, html_body)
                     result = {"success": success, "to_email": to_email,
                               "message": f"Email envoyé à {to_email}" if success else "Erreur SMTP"}
+
+        elif name == "handoff_to_agent":
+            agent           = clean.get("agent", "david")
+            client_request  = clean.get("client_request", "")
+            context_summary = clean.get("context_summary", "")
+            action_required = clean.get("action_required", "")
+            lines = [
+                "[CONTEXTE EMILY]",
+                "",
+                "Demande du client :",
+                client_request,
+            ]
+            if context_summary:
+                lines += ["", "Contexte (Emily) :", context_summary]
+            lines += [
+                "",
+                "Action immediate :",
+                action_required,
+            ]
+            result = {
+                "success": True,
+                "handoff": True,
+                "agent": agent,
+                "brief": "\n".join(lines),
+            }
+
         else:
             result = {"error": f"Outil inconnu: {name}"}
 
@@ -764,6 +804,8 @@ async def chat(req: ChatRequest):
                     await asyncio.sleep(0)
                     result = await execute_tool(tool_name, tool_args)
                     yield f"data: {json.dumps({'type': 'tool_end', 'tool': tool_name, 'data': result})}\n"
+                    if result.get("handoff"):
+                        yield f"data: {json.dumps({'type': 'handoff', 'agent': result.get('agent'), 'brief': result.get('brief', '')})}\n"
                     await asyncio.sleep(0)
 
                     messages.append({"role": "tool", "tool_call_id": tc.id,

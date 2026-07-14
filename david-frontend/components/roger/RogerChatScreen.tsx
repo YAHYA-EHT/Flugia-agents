@@ -7,7 +7,6 @@ import remarkGfm from "remark-gfm";
 import { HandoffPanel, detectHandoff } from "@/components/shared/HandoffPanel";
 
 type Role = "user" | "assistant";
-type EmilyContext = "emily" | "chatbot" | "agent_call";
 
 interface Message {
   id: string;
@@ -21,41 +20,27 @@ interface Message {
 
 interface Conversation {
   id: string;
-  context: EmilyContext;
   title: string;
   updatedAt: string;
   messages: { role: Role; content: string }[];
 }
 
-const API = "http://localhost:8001";
-const STORAGE_KEY = "flugia_emily_conversations_v1";
+const API          = "http://localhost:8002";
+const STORAGE_KEY  = "flugia_roger_conversations_v1";
+const PRIMARY      = "#ef4444";
+const GRADIENT     = "linear-gradient(135deg, #ef4444, #dc2626)";
 
-const CTX_CONFIG: Record<EmilyContext, { label: string; welcome: string; chips: [string, string][] }> = {
-  emily:      { label: "Support",     welcome: "Salut ! Je gère tout ce qui touche au support client — chatbots et agents vocaux. Qu'est-ce qu'on regarde ?", chips: [["Nos chatbots", "Montre-moi nos chatbots"], ["Nos appels", "Comment se passent nos appels ?"], ["Tâches urgentes", "Y a-t-il des tâches urgentes ?"], ["Balance minutes", "Combien de minutes il nous reste ?"]] },
-  chatbot:    { label: "Chatbot",     welcome: "Dans l'espace Chatbot. On analyse les performances ou on configure un bot ?", chips: [["Nos chatbots", "Montre-moi nos chatbots"], ["Performances", "Stats de nos chatbots cette semaine"], ["Notifications", "Nouvelles notifications chatbot ?"], ["Historique", "Historique des conversations"]] },
-  agent_call: { label: "Agent Call",  welcome: "Dans l'espace Agent Call. On regarde les appels ou les agents ?", chips: [["Dashboard appels", "Montre-moi le dashboard des appels"], ["Appels manqués", "Y a-t-il des appels manqués ?"], ["Transcriptions", "Dernières transcriptions d'appels"], ["Balance", "Combien de minutes il nous reste ?"]] },
-};
-
-// ── localStorage helpers ──────────────────────────────────────
-function loadAllConvs(): Conversation[] {
+// ── localStorage ──────────────────────────────────────────────
+function loadConvs(): Conversation[] {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]"); } catch { return []; }
 }
-function saveAllConvs(convs: Conversation[]) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(convs)); } catch {}
-}
-function getConvsByContext(ctx: EmilyContext): Conversation[] {
-  return loadAllConvs().filter(c => c.context === ctx).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-}
-function upsertConv(conv: Conversation) {
-  saveAllConvs([conv, ...loadAllConvs().filter(c => c.id !== conv.id)]);
-}
-function deleteConvById(id: string) {
-  saveAllConvs(loadAllConvs().filter(c => c.id !== id));
-}
-function newConvId() { return `ec_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`; }
+function saveConvs(c: Conversation[]) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(c)); } catch {} }
+function upsertConv(conv: Conversation) { saveConvs([conv, ...loadConvs().filter(c => c.id !== conv.id)]); }
+function deleteConvById(id: string) { saveConvs(loadConvs().filter(c => c.id !== id)); }
+function newCid() { return `r_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`; }
 
 let seq = 0;
-const uid = () => `em${++seq}_${Date.now()}`;
+const uid = () => `rm${++seq}`;
 
 function relTime(iso: string) {
   const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
@@ -80,12 +65,11 @@ function ConversationsPanel({ convs, activeId, open, onToggle, onNew, onSelect, 
   onSelect: (c: Conversation) => void; onDelete: (id: string) => void;
 }) {
   const groups = groupConvs(convs);
-  const EMILY_COLOR = "#4cc9f0";
   return (
     <aside className={`relative hidden shrink-0 flex-col overflow-hidden border-r border-gray-100 bg-gray-50/60 transition-[width] duration-300 md:flex ${open ? "w-64" : "w-12"}`}>
       <div className={`absolute inset-0 flex flex-col items-center gap-2 py-3 transition-opacity ${open ? "pointer-events-none opacity-0" : "opacity-100 delay-150"}`}>
-        <button onClick={onToggle} className="flex h-9 w-9 items-center justify-center rounded-lg bg-white shadow-sm text-slate-500 hover:text-cyan-400"><MessagesSquare className="h-4 w-4" /></button>
-        <button onClick={onNew} className="flex h-8 w-8 items-center justify-center rounded-lg text-white hover:opacity-90" style={{ background: EMILY_COLOR }}><Plus className="h-4 w-4" /></button>
+        <button onClick={onToggle} className="flex h-9 w-9 items-center justify-center rounded-lg bg-white shadow-sm text-slate-500 hover:text-red-400"><MessagesSquare className="h-4 w-4" /></button>
+        <button onClick={onNew} className="flex h-8 w-8 items-center justify-center rounded-lg text-white hover:opacity-90" style={{ background: PRIMARY }}><Plus className="h-4 w-4" /></button>
       </div>
       <div className={`absolute inset-0 flex min-w-64 flex-col transition-opacity ${open ? "opacity-100 delay-150" : "pointer-events-none opacity-0"}`}>
         <div className="flex items-center justify-between border-b border-gray-100 px-3 py-3">
@@ -93,14 +77,14 @@ function ConversationsPanel({ convs, activeId, open, onToggle, onNew, onSelect, 
             <button onClick={onToggle} className="flex h-6 w-6 items-center justify-center rounded text-slate-400 hover:bg-gray-100"><PanelLeftClose className="h-4 w-4" /></button>
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Conversations</span>
           </div>
-          <button onClick={onNew} className="flex h-7 w-7 items-center justify-center rounded-lg text-white hover:opacity-90" style={{ background: EMILY_COLOR }}><Plus className="h-4 w-4" /></button>
+          <button onClick={onNew} className="flex h-7 w-7 items-center justify-center rounded-lg text-white hover:opacity-90" style={{ background: PRIMARY }}><Plus className="h-4 w-4" /></button>
         </div>
         <div className="flex-1 overflow-y-auto pb-3">
           {convs.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-10 text-center">
               <MessagesSquare className="h-8 w-8 text-slate-200" />
               <p className="text-xs text-slate-400">Aucune conversation</p>
-              <p className="text-[11px] text-slate-300">Envoyez un message pour commencer</p>
+              <p className="text-[11px] text-slate-300">Posez une question à Roger</p>
             </div>
           ) : groups.map(({ label, items }) => (
             <div key={label}>
@@ -109,11 +93,11 @@ function ConversationsPanel({ convs, activeId, open, onToggle, onNew, onSelect, 
                 const active = c.id === activeId;
                 return (
                   <div key={c.id} onClick={() => onSelect(c)}
-                    className={`group mx-2 mb-0.5 flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 transition ${active ? "ring-1" : "hover:bg-white"}`}
-                    style={active ? { backgroundColor: `${EMILY_COLOR}15`, ringColor: `${EMILY_COLOR}30` } : {}}>
-                    <MessageSquare className="h-3.5 w-3.5 shrink-0" style={{ color: active ? EMILY_COLOR : "#cbd5e1" }} />
+                    className={`group mx-2 mb-0.5 flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 transition ${active ? "ring-1 ring-red-100" : "hover:bg-white"}`}
+                    style={active ? { backgroundColor: `${PRIMARY}10` } : {}}>
+                    <MessageSquare className="h-3.5 w-3.5 shrink-0" style={{ color: active ? PRIMARY : "#cbd5e1" }} />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-[12px] font-medium" style={{ color: active ? EMILY_COLOR : "#374151" }}>{c.title}</p>
+                      <p className="truncate text-[12px] font-medium" style={{ color: active ? PRIMARY : "#374151" }}>{c.title}</p>
                       <p className="text-[10px] text-slate-400">{relTime(c.updatedAt)}</p>
                     </div>
                     <button onClick={e => { e.stopPropagation(); onDelete(c.id); }}
@@ -134,41 +118,37 @@ function ConversationsPanel({ convs, activeId, open, onToggle, onNew, onSelect, 
 // ── Bubble ────────────────────────────────────────────────────
 function Bubble({ msg }: { msg: Message }) {
   const isUser = msg.role === "user";
-  const EMILY_GRADIENT = "linear-gradient(135deg, #4cc9f0, #0096C7)";
   return (
     <div className={`flex items-start gap-2.5 px-4 py-1.5 ${isUser ? "justify-end" : "justify-start"}`}>
       {!isUser && (
-        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-black text-white" style={{ background: "linear-gradient(135deg, #4cc9f0, #0096C7)" }}>E</div>
+        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-black text-white" style={{ background: GRADIENT }}>R</div>
       )}
       <div className={`flex max-w-[78%] flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
         {msg.tools && msg.tools.length > 0 && (
           <div className="flex flex-wrap gap-1 mb-1">
             {msg.tools.map(t => (
-              <span key={t} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1" style={{ background: "#4cc9f015", color: "#4cc9f0", ringColor: "#4cc9f030" }}>
-                <span className="h-1 w-1 rounded-full" style={{ background: "#4cc9f0" }} />{t}
+              <span key={t} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ring-red-100"
+                style={{ background: `${PRIMARY}12`, color: PRIMARY }}>
+                <span className="h-1 w-1 rounded-full" style={{ background: PRIMARY }} />{t}
               </span>
             ))}
           </div>
         )}
         <div className={`rounded-2xl px-4 py-2.5 text-[14px] leading-relaxed ${isUser ? "text-white rounded-tr-sm" : "bg-white text-slate-900 shadow-sm ring-1 ring-slate-100 rounded-tl-sm"}`}
-          style={isUser ? { background: EMILY_GRADIENT } : {}}>
+          style={isUser ? { background: GRADIENT } : {}}>
           {msg.pending ? (
-            msg.content ? (
-              <><span className="md-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown></span><span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-slate-400" /></>
-            ) : (
-              <span className="flex items-center gap-1 py-0.5">
-                {[0,150,300].map(d => <span key={d} className="h-1.5 w-1.5 rounded-full bg-slate-300 animate-bounce" style={{ animationDelay: `${d}ms` }} />)}
-              </span>
-            )
-          ) : isUser ? (
-            <span className="whitespace-pre-wrap">{msg.content}</span>
-          ) : (
-            <span className="md-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown></span>
-          )}
+            msg.content
+              ? <><span className="md-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown></span><span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-slate-400" /></>
+              : <span className="flex items-center gap-1 py-0.5">{[0,150,300].map(d => <span key={d} className="h-1.5 w-1.5 rounded-full bg-slate-300 animate-bounce" style={{ animationDelay: `${d}ms` }} />)}</span>
+          ) : isUser
+            ? <span className="whitespace-pre-wrap">{msg.content}</span>
+            : <span className="md-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown></span>
+          }
         </div>
         {msg.downloadUrl && (
           <a href={msg.downloadUrl} download={msg.fileName} target="_blank" rel="noopener noreferrer"
-            className="mt-1 inline-flex items-center gap-2 rounded-xl bg-[#4cc9f0] px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90">
+            className="mt-1 inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+            style={{ background: GRADIENT }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
               <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
@@ -185,94 +165,51 @@ function Bubble({ msg }: { msg: Message }) {
 }
 
 // ── Main ──────────────────────────────────────────────────────
-export function EmilyChatScreen({ context }: { context: EmilyContext }) {
-  const cfg = CTX_CONFIG[context];
-  const EMILY_COLOR = "#4cc9f0";
-
-  const [msgs, setMsgs] = useState<Message[]>([]);
-  const [convId, setConvId] = useState<string | null>(null);
-  const [convs, setConvs] = useState<Conversation[]>([]);
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
+export function RogerChatScreen() {
+  const [msgs, setMsgs]           = useState<Message[]>([]);
+  const [convId, setConvId]       = useState<string | null>(null);
+  const [convs, setConvs]         = useState<Conversation[]>([]);
+  const [text, setText]           = useState("");
+  const [busy, setBusy]           = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [handoffTarget, setHandoffTarget] = useState<string | null>(null);
 
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const xhrRef = useRef<XMLHttpRequest | null>(null);
-  const msgsRef = useRef<Message[]>([]);
-  const convIdRef    = useRef<string | null>(null);
-  const downloadUrlRef = useRef<string>("");
-  const fileNameRef    = useRef<string>("");
-  const handoffRef     = useRef<{ agent: string; brief: string } | null>(null);
+  const bottomRef  = useRef<HTMLDivElement>(null);
+  const handoffRef = useRef<{ agent: string; brief: string } | null>(null);
+  const xhrRef    = useRef<XMLHttpRequest | null>(null);
+  const msgsRef   = useRef<Message[]>([]);
+  const convIdRef = useRef<string | null>(null);
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
   }, []);
 
-  const refreshConvs = useCallback(() => {
-    setConvs(getConvsByContext(context));
-  }, [context]);
+  const refreshConvs = useCallback(() => setConvs(loadConvs()), []);
 
   useEffect(() => {
-    xhrRef.current?.abort();
-    setBusy(false);
-    setText("");
-    const list = getConvsByContext(context);
+    const list = loadConvs();
     setConvs(list);
-
-    // Brief de handoff envoyé par Roger ?
-    try {
-      const briefRaw = localStorage.getItem("flugia_handoff_brief_emily");
-      if (briefRaw) {
-        const { brief, timestamp } = JSON.parse(briefRaw);
-        if (Date.now() - timestamp < 5 * 60 * 1000 && brief) {
-          localStorage.removeItem("flugia_handoff_brief_emily");
-          localStorage.removeItem("flugia_handoff_brief_david");
-          localStorage.removeItem("flugia_handoff_brief_roger");
-          setMsgs([]); setConvId(null);
-          msgsRef.current = []; convIdRef.current = null;
-          setTimeout(() => send(brief), 600);
-          return;
-        }
-      }
-    } catch { /* silent */ }
-
     if (list.length > 0) {
       const latest = list[0];
-      const restored: Message[] = latest.messages.map(m => ({ id: uid(), role: m.role, content: m.content }));
-      setMsgs(restored);
-      setConvId(latest.id);
-      msgsRef.current = restored;
-      convIdRef.current = latest.id;
+      const restored = latest.messages.map(m => ({ id: uid(), role: m.role, content: m.content }));
+      setMsgs(restored); setConvId(latest.id);
+      msgsRef.current = restored; convIdRef.current = latest.id;
       setTimeout(() => bottomRef.current?.scrollIntoView(), 80);
-    } else {
-      setMsgs([]);
-      setConvId(null);
-      msgsRef.current = [];
-      convIdRef.current = null;
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [context]);
+  }, []);
 
   const newConv = useCallback(() => {
     xhrRef.current?.abort();
-    setBusy(false);
-    setMsgs([]);
-    setText("");
-    setConvId(null);
-    msgsRef.current = [];
-    convIdRef.current = null;
+    setBusy(false); setMsgs([]); setText(""); setConvId(null);
+    msgsRef.current = []; convIdRef.current = null;
   }, []);
 
   const selectConv = useCallback((c: Conversation) => {
-    xhrRef.current?.abort();
-    setBusy(false);
-    const restored: Message[] = c.messages.map(m => ({ id: uid(), role: m.role, content: m.content }));
-    setMsgs(restored);
-    setConvId(c.id);
-    msgsRef.current = restored;
-    convIdRef.current = c.id;
+    xhrRef.current?.abort(); setBusy(false);
+    const restored = c.messages.map(m => ({ id: uid(), role: m.role, content: m.content }));
+    setMsgs(restored); setConvId(c.id);
+    msgsRef.current = restored; convIdRef.current = c.id;
     setPanelOpen(false);
     setTimeout(() => bottomRef.current?.scrollIntoView(), 80);
   }, []);
@@ -286,15 +223,13 @@ export function EmilyChatScreen({ context }: { context: EmilyContext }) {
   const send = useCallback((userText: string) => {
     const trimmed = userText.trim();
     if (!trimmed || busy) return;
-    setText("");
-    setBusy(true);
+    setText(""); setBusy(true);
 
     const userMsg: Message = { id: uid(), role: "user", content: trimmed };
     const aId = uid();
     const aMsg: Message = { id: aId, role: "assistant", content: "", pending: true };
     const newMsgs = [...msgsRef.current, userMsg, aMsg];
-    setMsgs(newMsgs);
-    msgsRef.current = newMsgs;
+    setMsgs(newMsgs); msgsRef.current = newMsgs;
     scrollToBottom();
 
     const history = msgsRef.current
@@ -302,27 +237,25 @@ export function EmilyChatScreen({ context }: { context: EmilyContext }) {
       .map(m => ({ role: m.role, content: m.content }));
 
     let accumulated = "";
-    downloadUrlRef.current = "";
-    fileNameRef.current = "";
+    let capturedDownloadUrl = "";
+    let capturedFileName = "";
     handoffRef.current = null;
     const tools: string[] = [];
 
     const patch = (upd: Partial<Message>) =>
       setMsgs(prev => {
         const updated = prev.map(m => m.id === aId ? { ...m, ...upd } : m);
-        msgsRef.current = updated;
-        return updated;
+        msgsRef.current = updated; return updated;
       });
 
     const saveConversation = (finalContent: string) => {
       const finalMsgs = msgsRef.current
         .filter(m => !m.pending)
         .map(m => ({ role: m.role, content: m.content }));
-      const cid = convIdRef.current ?? newConvId();
-      convIdRef.current = cid;
-      setConvId(cid);
+      const cid = convIdRef.current ?? newCid();
+      convIdRef.current = cid; setConvId(cid);
       upsertConv({
-        id: cid, context,
+        id: cid,
         title: trimmed.slice(0, 55) + (trimmed.length > 55 ? "…" : ""),
         updatedAt: new Date().toISOString(),
         messages: finalMsgs,
@@ -345,26 +278,24 @@ export function EmilyChatScreen({ context }: { context: EmilyContext }) {
         try {
           const evt = JSON.parse(raw);
           switch (evt.type) {
-            case "token":
-            case "delta":
+            case "token": case "delta":
               accumulated += (evt.text ?? evt.content ?? "");
-              patch({ content: accumulated, pending: true });
-              break;
-            case "tool_end":
+              patch({ content: accumulated, pending: true }); break;
+            case "tool_start":
               tools.push(evt.tool ?? "");
-              patch({ tools: [...tools] });
+              patch({ tools: [...tools] }); break;
+            case "tool_end":
               if (evt.data?.download_url) {
-                downloadUrlRef.current = `http://localhost:8001${evt.data.download_url}`;
-                fileNameRef.current    = evt.data.file_name ?? "rapport.pdf";
-                patch({ downloadUrl: downloadUrlRef.current, fileName: fileNameRef.current });
+                capturedDownloadUrl = `http://localhost:8002${evt.data.download_url}`;
+                capturedFileName    = evt.data.file_name ?? "rapport.pdf";
+                patch({ downloadUrl: capturedDownloadUrl, fileName: capturedFileName });
               }
               break;
             case "handoff":
               handoffRef.current = { agent: evt.agent, brief: evt.brief ?? "" };
               break;
             case "done":
-              patch({ content: accumulated, pending: false });
-              break;
+              patch({ content: accumulated, pending: false }); break;
           }
         } catch { /* bad json */ }
       }
@@ -375,20 +306,16 @@ export function EmilyChatScreen({ context }: { context: EmilyContext }) {
       const finalized = msgsRef.current.map(m =>
         m.id === aId
           ? { ...m, content: finalContent, pending: false,
-              ...(downloadUrlRef.current ? { downloadUrl: downloadUrlRef.current, fileName: fileNameRef.current } : {}) }
+              ...(capturedDownloadUrl ? { downloadUrl: capturedDownloadUrl, fileName: capturedFileName } : {}) }
           : m
       );
-      msgsRef.current = finalized;
-      setMsgs(finalized);
+      msgsRef.current = finalized; setMsgs(finalized);
       saveConversation(finalContent);
-      // Detect handoff
+      // Handoff — stocker le brief dans localStorage pour que l'agent cible le lise
       if (handoffRef.current) {
         try {
-          // Effacer tous les briefs existants avant d'écrire le nouveau
           localStorage.removeItem("flugia_handoff_brief_david");
           localStorage.removeItem("flugia_handoff_brief_emily");
-          localStorage.removeItem("flugia_handoff_brief_david");
-          localStorage.removeItem("flugia_handoff_brief_roger");
           localStorage.removeItem("flugia_handoff_brief_roger");
           localStorage.setItem(
             `flugia_handoff_brief_${handoffRef.current.agent}`,
@@ -397,41 +324,47 @@ export function EmilyChatScreen({ context }: { context: EmilyContext }) {
         } catch { /* silent */ }
         setTimeout(() => setHandoffTarget(handoffRef.current!.agent), 800);
       } else {
-        const target = detectHandoff(finalContent, "emily");
+        const target = detectHandoff(finalContent, "roger");
         if (target) setTimeout(() => setHandoffTarget(target), 800);
       }
-      setBusy(false);
-      scrollToBottom();
+      setBusy(false); scrollToBottom();
     };
 
-    xhr.onerror = () => { patch({ content: "Impossible de joindre le serveur Emily.", pending: false }); setBusy(false); };
-    xhr.onabort = () => { setBusy(false); };
+    xhr.onerror  = () => { patch({ content: "Roger n'est pas disponible.", pending: false }); setBusy(false); };
+    xhr.onabort  = () => { setBusy(false); };
 
     xhr.open("POST", `${API}/chat`, true);
     xhr.setRequestHeader("Content-Type", "application/json");
-    xhr.send(JSON.stringify({ message: trimmed, history, context, user_id: "flugia_user" }));
-  }, [busy, context, scrollToBottom, refreshConvs]);
+    xhr.send(JSON.stringify({ message: trimmed, history, context: "global", user_id: "flugia_user" }));
+  }, [busy, scrollToBottom, refreshConvs]);
+
+  const CHIPS: [string, string][] = [
+    ["Vue globale",        "Où on en est globalement ?"],
+    ["Alertes",            "Y a-t-il des alertes sur nos départements ?"],
+    ["Rapport complet",    "Génère un rapport complet de toute la plateforme"],
+    ["Actions prioritaires", "Quelles sont les actions prioritaires cette semaine ?"],
+  ];
 
   return (
     <div className="flex h-full min-h-0">
       <ConversationsPanel
         convs={convs} activeId={convId} open={panelOpen}
-        onToggle={() => setPanelOpen(v => !v)}
-        onNew={newConv} onSelect={selectConv}
-        onDelete={id => setDeleteTarget(id)}
+        onToggle={() => setPanelOpen(v => !v)} onNew={newConv}
+        onSelect={selectConv} onDelete={id => setDeleteTarget(id)}
       />
+
       <div className="flex h-full min-h-0 flex-1 flex-col">
         <div className="flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl py-6">
             {msgs.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
-                <div className="flex h-14 w-14 items-center justify-center rounded-2xl text-xl font-black text-white shadow-lg" style={{ background: "linear-gradient(135deg, #4cc9f0, #0096C7)" }}>E</div>
-                <h2 className="mt-4 text-lg font-black text-slate-900">Emily — {cfg.label}</h2>
-                <p className="mt-1 text-sm text-slate-400">{cfg.welcome}</p>
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl text-xl font-black text-white shadow-lg" style={{ background: GRADIENT }}>R</div>
+                <h2 className="mt-4 text-lg font-black text-slate-900">Roger — Direction Générale</h2>
+                <p className="mt-1 text-sm text-slate-400">Je coordonne David et Emily pour une vue complète de toute la plateforme.</p>
                 <div className="mt-5 flex flex-wrap justify-center gap-2">
-                  {cfg.chips.map(([label, msg]) => (
+                  {CHIPS.map(([label, msg]) => (
                     <button key={label} onClick={() => send(msg)}
-                      className="rounded-full border border-slate-200 px-3.5 py-1.5 text-sm text-slate-600 transition hover:border-cyan-200 hover:bg-cyan-50">
+                      className="rounded-full border border-slate-200 px-3.5 py-1.5 text-sm text-slate-600 transition hover:border-red-200 hover:bg-red-50">
                       {label}
                     </button>
                   ))}
@@ -441,16 +374,19 @@ export function EmilyChatScreen({ context }: { context: EmilyContext }) {
             <div ref={bottomRef} />
           </div>
         </div>
+
         <div className="border-t border-slate-100">
           <div className="mx-auto w-full max-w-3xl px-4 py-3">
-            <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm transition focus-within:border-cyan-400 focus-within:ring-2 focus-within:ring-cyan-100">
-              <textarea value={text} onChange={e => setText(e.target.value)}
+            <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm transition focus-within:border-red-300 focus-within:ring-2 focus-within:ring-red-100">
+              <textarea
+                value={text} onChange={e => setText(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(text); } }}
-                rows={1} placeholder="Posez une question à Emily…"
-                className="max-h-36 flex-1 resize-none bg-transparent py-1.5 text-[14px] outline-none" />
+                rows={1} placeholder="Posez une question à Roger…"
+                className="max-h-36 flex-1 resize-none bg-transparent py-1.5 text-[14px] outline-none"
+              />
               <button onClick={() => send(text)} disabled={busy || !text.trim()}
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-white transition hover:opacity-90 disabled:opacity-40"
-                style={{ background: "linear-gradient(135deg, #4cc9f0, #0096C7)" }}>
+                style={{ background: GRADIENT }}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
               </button>
             </div>
@@ -458,6 +394,7 @@ export function EmilyChatScreen({ context }: { context: EmilyContext }) {
           </div>
         </div>
       </div>
+
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="w-80 rounded-2xl bg-white p-6 shadow-xl">
@@ -466,15 +403,16 @@ export function EmilyChatScreen({ context }: { context: EmilyContext }) {
             <div className="mt-4 flex gap-3">
               <button onClick={() => setDeleteTarget(null)} className="flex-1 rounded-xl border py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Annuler</button>
               <button onClick={() => { deleteConv(deleteTarget); setDeleteTarget(null); }}
-                className="flex-1 rounded-xl py-2 text-sm font-medium text-white hover:opacity-90" style={{ background: "#ef4444" }}>Supprimer</button>
+                className="flex-1 rounded-xl py-2 text-sm font-medium text-white" style={{ background: "#ef4444" }}>Supprimer</button>
             </div>
           </div>
         </div>
       )}
+
       <HandoffPanel
         targetAgent={handoffTarget}
         onDismiss={() => setHandoffTarget(null)}
-        currentAgentName="Emily"
+        currentAgentName="Roger"
       />
     </div>
   );

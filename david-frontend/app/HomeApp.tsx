@@ -6,6 +6,7 @@ import { useAuthStore } from "@/lib/aria/state/authStore";
 import { Aria } from "@/components/aria/Aria";
 import { David } from "@/components/david/David";
 import { Emily } from "@/components/emily/Emily";
+import { Roger } from "@/components/roger/Roger";
 import { FlugiaShell } from "@/components/flugia/FlugiaShell";
 import { FlugiaMainDashboard } from "@/components/flugia/FlugiaMainDashboard";
 import { OverviewScreen } from "@/components/aria/OverviewScreen";
@@ -138,6 +139,8 @@ export default function HomeApp() {
           <David onBack={() => router.push(dashboardPath())} initialFeature={marketingFeature} />
         ) : agentId === "support" ? (
           <Emily onBack={() => router.push(dashboardPath())} initialFeature={supportFeature} />
+        ) : agentId === "global" ? (
+          <Roger onBack={() => router.push(dashboardPath())} />
         ) : (
           <AgentPlaceholder agentId={agentId} onBack={() => router.push(dashboardPath())} />
         )

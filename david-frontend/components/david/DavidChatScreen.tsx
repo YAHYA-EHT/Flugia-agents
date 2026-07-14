@@ -204,7 +204,10 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
   const xhrRef = useRef<XMLHttpRequest | null>(null);
   // Keep a mutable ref to current messages for saving after XHR completes
   const msgsRef = useRef<Message[]>([]);
-  const convIdRef = useRef<string | null>(null);
+  const convIdRef    = useRef<string | null>(null);
+  const downloadUrlRef = useRef<string>("");
+  const fileNameRef    = useRef<string>("");
+  const handoffRef     = useRef<{ agent: string; brief: string } | null>(null);
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
@@ -221,6 +224,25 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
     setText("");
     const list = getConvsByContext(context);
     setConvs(list);
+
+    // Brief de handoff envoyé par Roger ?
+    try {
+      const briefRaw = localStorage.getItem("flugia_handoff_brief_david");
+      if (briefRaw) {
+        const { brief, timestamp } = JSON.parse(briefRaw);
+        if (Date.now() - timestamp < 5 * 60 * 1000 && brief) {
+          localStorage.removeItem("flugia_handoff_brief_david");
+          localStorage.removeItem("flugia_handoff_brief_emily");
+          localStorage.removeItem("flugia_handoff_brief_roger");
+          setMsgs([]); setConvId(null);
+          msgsRef.current = []; convIdRef.current = null;
+          // Envoyer comme instruction système à David — pas comme message utilisateur
+          setTimeout(() => send(brief), 600);
+          return;
+        }
+      }
+    } catch { /* silent */ }
+
     if (list.length > 0) {
       const latest = list[0];
       const restored: Message[] = latest.messages.map(m => ({ id: uid(), role: m.role, content: m.content }));
@@ -287,8 +309,9 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
       .map(m => ({ role: m.role, content: m.content }));
 
     let accumulated = "";
-    let capturedDownloadUrl = "";
-    let capturedFileName = "";
+    downloadUrlRef.current = "";
+    fileNameRef.current = "";
+    handoffRef.current = null;
     const tools: string[] = [];
 
     const patch = (upd: Partial<Message>) => {
@@ -351,10 +374,13 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
               patch({ tools: [...tools] });
               // Capturer le lien de téléchargement PDF si présent
               if (evt.data?.download_url) {
-                capturedDownloadUrl = `http://localhost:8000${evt.data.download_url}`;
-                capturedFileName = evt.data.file_name ?? "rapport.pdf";
-                patch({ downloadUrl: capturedDownloadUrl, fileName: capturedFileName });
+                downloadUrlRef.current = `http://localhost:8000${evt.data.download_url}`;
+                fileNameRef.current    = evt.data.file_name ?? "rapport.pdf";
+                patch({ downloadUrl: downloadUrlRef.current, fileName: fileNameRef.current });
               }
+              break;
+            case "handoff":
+              handoffRef.current = { agent: evt.agent, brief: evt.brief ?? "" };
               break;
             case "done":
               patch({ content: accumulated, pending: false });
@@ -365,24 +391,34 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
     };
 
     xhr.onload = () => {
-      // Finalize assistant message
       const finalContent = accumulated || "…";
-      patch({ content: finalContent, pending: false });
-
-      // Update msgsRef with the final state
       const finalized = msgsRef.current.map(m =>
-        m.id === aId ? { ...m, content: finalContent, pending: false } : m
+        m.id === aId
+          ? { ...m, content: finalContent, pending: false,
+              ...(downloadUrlRef.current ? { downloadUrl: downloadUrlRef.current, fileName: fileNameRef.current } : {}) }
+          : m
       );
       msgsRef.current = finalized;
       setMsgs(finalized);
-
-      // Save to localStorage
       saveConversation(finalContent);
-
-      // Detect handoff
-      const target = detectHandoff(finalContent, "david");
-      if (target) setTimeout(() => setHandoffTarget(target), 800);
-
+      if (handoffRef.current) {
+        try {
+          // Effacer tous les briefs existants avant d'écrire le nouveau
+          localStorage.removeItem("flugia_handoff_brief_david");
+          localStorage.removeItem("flugia_handoff_brief_emily");
+          localStorage.removeItem("flugia_handoff_brief_roger");
+          localStorage.removeItem("flugia_handoff_brief_emily");
+          localStorage.removeItem("flugia_handoff_brief_roger");
+          localStorage.setItem(
+            `flugia_handoff_brief_${handoffRef.current.agent}`,
+            JSON.stringify({ brief: handoffRef.current.brief, timestamp: Date.now() })
+          );
+        } catch { /* silent */ }
+        setTimeout(() => setHandoffTarget(handoffRef.current!.agent), 800);
+      } else {
+        const target = detectHandoff(finalContent, "david");
+        if (target) setTimeout(() => setHandoffTarget(target), 800);
+      }
       setBusy(false);
       scrollToBottom();
     };
