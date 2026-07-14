@@ -96,9 +96,12 @@ interface HandoffPanelProps {
   targetAgent: string | null;
   onDismiss: () => void;
   currentAgentName: string;
+  pendingQuestion?: string;
 }
 
-export function HandoffPanel({ targetAgent, onDismiss, currentAgentName }: HandoffPanelProps) {
+export const HANDOFF_STORAGE_KEY = "flugia_pending_handoff";
+
+export function HandoffPanel({ targetAgent, onDismiss, currentAgentName, pendingQuestion }: HandoffPanelProps) {
   const router = useRouter();
   const [visible, setVisible] = useState(false);
 
@@ -115,6 +118,11 @@ export function HandoffPanel({ targetAgent, onDismiss, currentAgentName }: Hando
   if (!agent) return null;
 
   function goToAgent() {
+    if (pendingQuestion) {
+      sessionStorage.setItem(HANDOFF_STORAGE_KEY, JSON.stringify({
+        question: pendingQuestion, from: currentAgentName,
+      }));
+    }
     router.push(agent.path);
     onDismiss();
   }

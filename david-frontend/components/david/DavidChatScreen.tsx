@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { ArrowUp, Loader2, Plus, PanelLeftClose, MessagesSquare, MessageSquare, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { HandoffPanel, detectHandoff } from "@/components/shared/HandoffPanel";
+import { HandoffPanel, detectHandoff, HANDOFF_STORAGE_KEY } from "@/components/shared/HandoffPanel";
 
 // ── Types ─────────────────────────────────────────────────────
 type Role = "user" | "assistant";
@@ -199,6 +199,7 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
   const [panelOpen, setPanelOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [handoffTarget, setHandoffTarget] = useState<string | null>(null);
+  const [handoffQuestion, setHandoffQuestion] = useState<string>("");
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const xhrRef = useRef<XMLHttpRequest | null>(null);
@@ -237,6 +238,21 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [context]);
+
+  // Consume a pending handoff question (set by another agent's redirect), once per mount.
+  // Runs after the context-init effect above so its setText(question) isn't wiped by setText("").
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(HANDOFF_STORAGE_KEY);
+      if (raw) {
+        const { question } = JSON.parse(raw);
+        if (question) setText(question);
+        // Deferred so React Strict Mode's double-invoke (dev only) can still
+        // read the value on its second pass before it's actually removed.
+        setTimeout(() => sessionStorage.removeItem(HANDOFF_STORAGE_KEY), 0);
+      }
+    } catch { /* ignore malformed/missing storage */ }
+  }, []);
 
   const newConv = useCallback(() => {
     xhrRef.current?.abort();
@@ -381,7 +397,10 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
 
       // Detect handoff
       const target = detectHandoff(finalContent, "david");
-      if (target) setTimeout(() => setHandoffTarget(target), 800);
+      if (target) {
+        setHandoffQuestion(trimmed);
+        setTimeout(() => setHandoffTarget(target), 800);
+      }
 
       setBusy(false);
       scrollToBottom();
@@ -474,6 +493,7 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
         targetAgent={handoffTarget}
         onDismiss={() => setHandoffTarget(null)}
         currentAgentName="David"
+        pendingQuestion={handoffQuestion}
       />
     </div>
   );
