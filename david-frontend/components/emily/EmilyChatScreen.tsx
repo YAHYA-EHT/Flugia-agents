@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { ArrowUp, Loader2, Plus, PanelLeftClose, MessagesSquare, MessageSquare, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { HandoffPanel, detectHandoff } from "@/components/shared/HandoffPanel";
+import { HandoffPanel, detectHandoff, HANDOFF_STORAGE_KEY } from "@/components/shared/HandoffPanel";
 
 type Role = "user" | "assistant";
 type EmilyContext = "emily" | "chatbot" | "agent_call";
@@ -36,7 +36,6 @@ const CTX_CONFIG: Record<EmilyContext, { label: string; welcome: string; chips: 
   agent_call: { label: "Agent Call",  welcome: "Dans l'espace Agent Call. On regarde les appels ou les agents ?", chips: [["Dashboard appels", "Montre-moi le dashboard des appels"], ["Appels manqués", "Y a-t-il des appels manqués ?"], ["Transcriptions", "Dernières transcriptions d'appels"], ["Balance", "Combien de minutes il nous reste ?"]] },
 };
 
-// ── localStorage helpers ──────────────────────────────────────
 function loadAllConvs(): Conversation[] {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]"); } catch { return []; }
 }
@@ -73,7 +72,6 @@ function groupConvs(convs: Conversation[]) {
   return ["Aujourd'hui","Hier","Cette semaine","Plus ancien"].filter(k => g[k]).map(k => ({ label: k, items: g[k] }));
 }
 
-// ── ConversationsPanel ────────────────────────────────────────
 function ConversationsPanel({ convs, activeId, open, onToggle, onNew, onSelect, onDelete }: {
   convs: Conversation[]; activeId: string | null; open: boolean;
   onToggle: () => void; onNew: () => void;
@@ -131,7 +129,6 @@ function ConversationsPanel({ convs, activeId, open, onToggle, onNew, onSelect, 
   );
 }
 
-// ── Bubble ────────────────────────────────────────────────────
 function Bubble({ msg }: { msg: Message }) {
   const isUser = msg.role === "user";
   const EMILY_GRADIENT = "linear-gradient(135deg, #4cc9f0, #0096C7)";
@@ -184,7 +181,6 @@ function Bubble({ msg }: { msg: Message }) {
   );
 }
 
-// ── Main ──────────────────────────────────────────────────────
 export function EmilyChatScreen({ context }: { context: EmilyContext }) {
   const cfg = CTX_CONFIG[context];
   const EMILY_COLOR = "#4cc9f0";
@@ -198,10 +194,10 @@ export function EmilyChatScreen({ context }: { context: EmilyContext }) {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [handoffTarget, setHandoffTarget] = useState<string | null>(null);
 
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const xhrRef = useRef<XMLHttpRequest | null>(null);
-  const msgsRef = useRef<Message[]>([]);
-  const convIdRef    = useRef<string | null>(null);
+  const bottomRef   = useRef<HTMLDivElement>(null);
+  const xhrRef      = useRef<XMLHttpRequest | null>(null);
+  const msgsRef     = useRef<Message[]>([]);
+  const convIdRef      = useRef<string | null>(null);
   const downloadUrlRef = useRef<string>("");
   const fileNameRef    = useRef<string>("");
   const handoffRef     = useRef<{ agent: string; brief: string } | null>(null);
@@ -221,7 +217,6 @@ export function EmilyChatScreen({ context }: { context: EmilyContext }) {
     const list = getConvsByContext(context);
     setConvs(list);
 
-    // Brief de handoff envoyé par Roger ?
     try {
       const briefRaw = localStorage.getItem("flugia_handoff_brief_emily");
       if (briefRaw) {
@@ -350,9 +345,11 @@ export function EmilyChatScreen({ context }: { context: EmilyContext }) {
               accumulated += (evt.text ?? evt.content ?? "");
               patch({ content: accumulated, pending: true });
               break;
-            case "tool_end":
+            case "tool_start":
               tools.push(evt.tool ?? "");
               patch({ tools: [...tools] });
+              break;
+            case "tool_end":
               if (evt.data?.download_url) {
                 downloadUrlRef.current = `http://localhost:8001${evt.data.download_url}`;
                 fileNameRef.current    = evt.data.file_name ?? "rapport.pdf";
@@ -381,14 +378,11 @@ export function EmilyChatScreen({ context }: { context: EmilyContext }) {
       msgsRef.current = finalized;
       setMsgs(finalized);
       saveConversation(finalContent);
-      // Detect handoff
+
       if (handoffRef.current) {
         try {
-          // Effacer tous les briefs existants avant d'écrire le nouveau
           localStorage.removeItem("flugia_handoff_brief_david");
           localStorage.removeItem("flugia_handoff_brief_emily");
-          localStorage.removeItem("flugia_handoff_brief_david");
-          localStorage.removeItem("flugia_handoff_brief_roger");
           localStorage.removeItem("flugia_handoff_brief_roger");
           localStorage.setItem(
             `flugia_handoff_brief_${handoffRef.current.agent}`,
@@ -400,6 +394,7 @@ export function EmilyChatScreen({ context }: { context: EmilyContext }) {
         const target = detectHandoff(finalContent, "emily");
         if (target) setTimeout(() => setHandoffTarget(target), 800);
       }
+
       setBusy(false);
       scrollToBottom();
     };

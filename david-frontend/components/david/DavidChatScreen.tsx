@@ -6,7 +6,6 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { HandoffPanel, detectHandoff } from "@/components/shared/HandoffPanel";
 
-// ── Types ─────────────────────────────────────────────────────
 type Role = "user" | "assistant";
 type DavidContext = "david" | "e_reputation" | "seo" | "linkedin";
 
@@ -28,7 +27,6 @@ interface Conversation {
   messages: { role: Role; content: string }[];
 }
 
-// ── Config ────────────────────────────────────────────────────
 const API = "http://localhost:8000";
 const STORAGE_KEY = "flugia_conversations_v2";
 
@@ -39,28 +37,21 @@ const CTX_CONFIG: Record<DavidContext, { label: string; welcome: string; chips: 
   linkedin:     { label: "LinkedIn",     welcome: "Dans l'espace LinkedIn. On publie ou on planifie ?", chips: [["Créer un post", "Crée-moi un post LinkedIn"], ["Planifier", "Planifie des posts pour la semaine"], ["Stratégie", "Comment améliorer ma présence LinkedIn ?"]] },
 };
 
-// ── localStorage helpers ──────────────────────────────────────
 function loadAllConvs(): Conversation[] {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]"); } catch { return []; }
 }
-
 function saveAllConvs(convs: Conversation[]) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(convs)); } catch {}
 }
-
 function getConvsByContext(ctx: DavidContext): Conversation[] {
   return loadAllConvs().filter(c => c.context === ctx).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
-
 function upsertConv(conv: Conversation) {
-  const all = loadAllConvs().filter(c => c.id !== conv.id);
-  saveAllConvs([conv, ...all]);
+  saveAllConvs([conv, ...loadAllConvs().filter(c => c.id !== conv.id)]);
 }
-
 function deleteConvById(id: string) {
   saveAllConvs(loadAllConvs().filter(c => c.id !== id));
 }
-
 function newConvId() { return `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`; }
 
 let seq = 0;
@@ -82,7 +73,6 @@ function groupConvs(convs: Conversation[]) {
   return ["Aujourd'hui","Hier","Cette semaine","Plus ancien"].filter(k => g[k]).map(k => ({ label: k, items: g[k] }));
 }
 
-// ── ConversationsPanel ────────────────────────────────────────
 function ConversationsPanel({ convs, activeId, open, onToggle, onNew, onSelect, onDelete }: {
   convs: Conversation[]; activeId: string | null; open: boolean;
   onToggle: () => void; onNew: () => void;
@@ -138,7 +128,6 @@ function ConversationsPanel({ convs, activeId, open, onToggle, onNew, onSelect, 
   );
 }
 
-// ── Bubble ────────────────────────────────────────────────────
 function Bubble({ msg }: { msg: Message }) {
   const isUser = msg.role === "user";
   return (
@@ -188,23 +177,23 @@ function Bubble({ msg }: { msg: Message }) {
     </div>
   );
 }
+
 export function DavidChatScreen({ context }: { context: DavidContext }) {
   const cfg = CTX_CONFIG[context];
 
-  const [msgs, setMsgs] = useState<Message[]>([]);
-  const [convId, setConvId] = useState<string | null>(null);
-  const [convs, setConvs] = useState<Conversation[]>([]);
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [msgs, setMsgs]           = useState<Message[]>([]);
+  const [convId, setConvId]       = useState<string | null>(null);
+  const [convs, setConvs]         = useState<Conversation[]>([]);
+  const [text, setText]           = useState("");
+  const [busy, setBusy]           = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [handoffTarget, setHandoffTarget] = useState<string | null>(null);
 
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const xhrRef = useRef<XMLHttpRequest | null>(null);
-  // Keep a mutable ref to current messages for saving after XHR completes
-  const msgsRef = useRef<Message[]>([]);
-  const convIdRef    = useRef<string | null>(null);
+  const bottomRef      = useRef<HTMLDivElement>(null);
+  const xhrRef         = useRef<XMLHttpRequest | null>(null);
+  const msgsRef        = useRef<Message[]>([]);
+  const convIdRef      = useRef<string | null>(null);
   const downloadUrlRef = useRef<string>("");
   const fileNameRef    = useRef<string>("");
   const handoffRef     = useRef<{ agent: string; brief: string } | null>(null);
@@ -217,7 +206,6 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
     setConvs(getConvsByContext(context));
   }, [context]);
 
-  // Init: load conversations from localStorage and open latest
   useEffect(() => {
     xhrRef.current?.abort();
     setBusy(false);
@@ -225,7 +213,6 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
     const list = getConvsByContext(context);
     setConvs(list);
 
-    // Brief de handoff envoyé par Roger ?
     try {
       const briefRaw = localStorage.getItem("flugia_handoff_brief_david");
       if (briefRaw) {
@@ -236,7 +223,6 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
           localStorage.removeItem("flugia_handoff_brief_roger");
           setMsgs([]); setConvId(null);
           msgsRef.current = []; convIdRef.current = null;
-          // Envoyer comme instruction système à David — pas comme message utilisateur
           setTimeout(() => send(brief), 600);
           return;
         }
@@ -297,13 +283,11 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
     const userMsg: Message = { id: uid(), role: "user", content: trimmed };
     const aId = uid();
     const aMsg: Message = { id: aId, role: "assistant", content: "", pending: true };
-
     const newMsgs = [...msgsRef.current, userMsg, aMsg];
     setMsgs(newMsgs);
     msgsRef.current = newMsgs;
     scrollToBottom();
 
-    // History to send = all previous messages (no pending)
     const history = msgsRef.current
       .filter(m => !m.pending && m.id !== aId)
       .map(m => ({ role: m.role, content: m.content }));
@@ -323,28 +307,18 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
     };
 
     const saveConversation = (finalContent: string) => {
-      // Build the final messages list (replace pending assistant with final)
       const finalMsgs = msgsRef.current
         .filter(m => !m.pending)
         .map(m => ({ role: m.role, content: m.content }));
-
-      // If assistant message exists but wasn't finalized yet, add it
-      const hasAssistant = finalMsgs.some((m, i) => i === finalMsgs.length - 1 && m.role === "assistant" && m.content === finalContent);
-      const toSave = hasAssistant ? finalMsgs : [...finalMsgs.filter(m => m.content !== "" || m.role === "user")];
-
       const cid = convIdRef.current ?? newConvId();
       convIdRef.current = cid;
       setConvId(cid);
-
-      const title = trimmed.slice(0, 55) + (trimmed.length > 55 ? "…" : "");
-      const conv: Conversation = {
-        id: cid,
-        context,
-        title,
+      upsertConv({
+        id: cid, context,
+        title: trimmed.slice(0, 55) + (trimmed.length > 55 ? "…" : ""),
         updatedAt: new Date().toISOString(),
-        messages: toSave,
-      };
-      upsertConv(conv);
+        messages: finalMsgs,
+      });
       refreshConvs();
     };
 
@@ -355,8 +329,7 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
     xhr.onprogress = () => {
       const chunk = xhr.responseText.slice(processed);
       processed = xhr.responseText.length;
-      const lines = chunk.split("\n");
-      for (const line of lines) {
+      for (const line of chunk.split("\n")) {
         const t = line.trim();
         if (!t.startsWith("data:")) continue;
         const raw = t.slice(5).trim();
@@ -369,10 +342,11 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
               accumulated += (evt.text ?? evt.content ?? "");
               patch({ content: accumulated, pending: true });
               break;
-            case "tool_end":
+            case "tool_start":
               tools.push(evt.tool ?? "");
               patch({ tools: [...tools] });
-              // Capturer le lien de téléchargement PDF si présent
+              break;
+            case "tool_end":
               if (evt.data?.download_url) {
                 downloadUrlRef.current = `http://localhost:8000${evt.data.download_url}`;
                 fileNameRef.current    = evt.data.file_name ?? "rapport.pdf";
@@ -401,12 +375,10 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
       msgsRef.current = finalized;
       setMsgs(finalized);
       saveConversation(finalContent);
+
       if (handoffRef.current) {
         try {
-          // Effacer tous les briefs existants avant d'écrire le nouveau
           localStorage.removeItem("flugia_handoff_brief_david");
-          localStorage.removeItem("flugia_handoff_brief_emily");
-          localStorage.removeItem("flugia_handoff_brief_roger");
           localStorage.removeItem("flugia_handoff_brief_emily");
           localStorage.removeItem("flugia_handoff_brief_roger");
           localStorage.setItem(
@@ -419,44 +391,32 @@ export function DavidChatScreen({ context }: { context: DavidContext }) {
         const target = detectHandoff(finalContent, "david");
         if (target) setTimeout(() => setHandoffTarget(target), 800);
       }
+
       setBusy(false);
       scrollToBottom();
     };
 
-    xhr.onerror = () => {
-      patch({ content: "Impossible de joindre le serveur.", pending: false });
-      setBusy(false);
-    };
-
+    xhr.onerror = () => { patch({ content: "Impossible de joindre le serveur.", pending: false }); setBusy(false); };
     xhr.onabort = () => { setBusy(false); };
 
     xhr.open("POST", `${API}/chat`, true);
     xhr.setRequestHeader("Content-Type", "application/json");
-    xhr.send(JSON.stringify({
-      message: trimmed,
-      history,
-      context,
-      user_id: "flugia_user",
-      conv_id: null,
-    }));
+    xhr.send(JSON.stringify({ message: trimmed, history, context, user_id: "flugia_user" }));
   }, [busy, context, scrollToBottom, refreshConvs]);
-
-  const showWelcome = msgs.length === 0;
 
   return (
     <div className="flex h-full min-h-0">
       <ConversationsPanel
         convs={convs} activeId={convId} open={panelOpen}
         onToggle={() => setPanelOpen(v => !v)}
-        onNew={newConv}
-        onSelect={selectConv}
+        onNew={newConv} onSelect={selectConv}
         onDelete={id => setDeleteTarget(id)}
       />
 
       <div className="flex h-full min-h-0 flex-1 flex-col">
         <div className="flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl py-6">
-            {showWelcome ? (
+            {msgs.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#4cc9f0] to-[#4361ee] text-xl font-black text-white shadow-lg">D</div>
                 <h2 className="mt-4 text-lg font-black text-slate-900">David — {cfg.label}</h2>
