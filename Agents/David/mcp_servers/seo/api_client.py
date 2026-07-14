@@ -353,13 +353,31 @@ async def get_blog_posts(status: str = None, limit: int = 20) -> dict:
 
 
 async def get_blog_post(post_id: int) -> dict:
-    """Détail d'un article SEO par ID."""
+    """Détail d'un article SEO par ID — avec retry sur erreur intermittente."""
     if MODE == "mock":
         post = next((p for p in MOCK_BLOG_POSTS if p["id"] == post_id), None)
         if not post:
             return {"success": False, "error": "Article introuvable"}
         return {"success": True, "data": post}
-    return await _get(f"/api/content-seo/blog-posts/{post_id}")
+    # Retry 2 fois sur erreur réseau intermittente
+    last_err = None
+    for attempt in range(3):
+        try:
+            result = await _get(f"/api/content-seo/blog-posts/{post_id}")
+            if result.get("success"):
+                # Normaliser le champ translations si présent
+                data = result.get("data", {})
+                if isinstance(data, dict) and "translations" not in data:
+                    data["translations"] = []
+                return result
+            # Erreur API — pas la peine de retry
+            return result
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                import asyncio
+                await asyncio.sleep(1.5 * (attempt + 1))
+    return {"success": False, "error": f"Erreur intermittente après 3 tentatives: {str(last_err)[:80]}"}
 
 
 async def get_title_suggestions(status: str = None) -> dict:
@@ -520,7 +538,17 @@ async def n8n_regenerate_blog_post(post_id: int, target_region: str = "be") -> d
 
 # ── À DÉCOMMENTER APRÈS VALIDATION ────────────────────────────
 
-# async def publish_blog_post(post_id: int) -> dict:
+async def publish_blog_post(post_id: int) -> dict:
+    """Publie un article SEO sur WordPress."""
+    if MODE == "mock":
+        return {"success": True, "message": f"Article {post_id} publié (mock)"}
+    return await _post(f"/api/content-seo/blog-posts/{post_id}/publish", {})
+
+async def unpublish_blog_post(post_id: int) -> dict:
+    """Dépublie un article SEO (remet en draft)."""
+    if MODE == "mock":
+        return {"success": True, "message": f"Article {post_id} dépublié (mock)"}
+    return await _post(f"/api/content-seo/blog-posts/{post_id}/unpublish", {})
 #     """
 #     POST /api/content-seo/blog-posts/{id}/publish
 #     Publie un article sur la plateforme liée.

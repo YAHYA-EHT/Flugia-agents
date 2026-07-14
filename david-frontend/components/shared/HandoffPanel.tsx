@@ -47,37 +47,42 @@ const AGENTS: Record<string, Agent> = {
   },
 };
 
-// Patterns de détection dans la réponse de l'agent
+// Patterns de détection — uniquement phrases de redirection explicites
+// JAMAIS détecter sur des mots-clés métier seuls (ex: "campagne" chez John ne doit pas déclencher)
 const HANDOFF_PATTERNS: { agent: string; patterns: RegExp[] }[] = [
   {
     agent: "john",
     patterns: [
-      /\b(john|sales|ventes|commercial|prospection|campagne|outreach)\b/i,
       /\bje.*redirige.*john\b/i,
-      /\bjohn.*gère\b/i,
+      /\bjohn.*gère\s+(ça|cela|cette partie|le commercial|les ventes|la prospection)\b/i,
+      /\bc'est.*john\s+(qui|chez nous)\b/i,
+      /\bpour\s+(ça|cela|le commercial|les ventes|la prospection)[,\s].*john\b/i,
     ],
   },
   {
     agent: "emily",
     patterns: [
-      /\b(emily|support|chatbot|agent call|appel|ticket)\b/i,
       /\bje.*redirige.*emily\b/i,
-      /\bemily.*gère\b/i,
+      /\bemily.*gère\s+(ça|cela|cette partie|le support|les appels|les chatbots)\b/i,
+      /\bc'est.*emily\s+(qui|chez nous)\b/i,
+      /\bpour\s+(ça|cela|le support|les appels)[,\s].*emily\b/i,
     ],
   },
   {
     agent: "david",
     patterns: [
-      /\b(david|marketing|seo|réputation|linkedin)\b/i,
       /\bje.*redirige.*david\b/i,
-      /\bdavid.*gère\b/i,
+      /\bdavid.*gère\s+(ça|cela|cette partie|le marketing|le seo|la réputation)\b/i,
+      /\bc'est.*david\s+(qui|chez nous)\b/i,
+      /\bpour\s+(ça|cela|le marketing|le seo|la réputation)[,\s].*david\b/i,
     ],
   },
   {
     agent: "roger",
     patterns: [
-      /\b(roger|orchestrat|direction|global)\b/i,
       /\bje.*redirige.*roger\b/i,
+      /\broger.*gère\s+(ça|cela|cette partie|la vue globale)\b/i,
+      /\bc'est.*roger\s+(qui|chez nous)\b/i,
     ],
   },
 ];
@@ -96,12 +101,9 @@ interface HandoffPanelProps {
   targetAgent: string | null;
   onDismiss: () => void;
   currentAgentName: string;
-  pendingQuestion?: string;
 }
 
-export const HANDOFF_STORAGE_KEY = "flugia_pending_handoff";
-
-export function HandoffPanel({ targetAgent, onDismiss, currentAgentName, pendingQuestion }: HandoffPanelProps) {
+export function HandoffPanel({ targetAgent, onDismiss, currentAgentName }: HandoffPanelProps) {
   const router = useRouter();
   const [visible, setVisible] = useState(false);
 
@@ -118,11 +120,6 @@ export function HandoffPanel({ targetAgent, onDismiss, currentAgentName, pending
   if (!agent) return null;
 
   function goToAgent() {
-    if (pendingQuestion) {
-      sessionStorage.setItem(HANDOFF_STORAGE_KEY, JSON.stringify({
-        question: pendingQuestion, from: currentAgentName,
-      }));
-    }
     router.push(agent.path);
     onDismiss();
   }

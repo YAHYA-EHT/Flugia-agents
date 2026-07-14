@@ -147,6 +147,7 @@ def get_circuit(agent: str) -> CircuitBreaker:
 AGENTS = {
     "david": os.getenv("DAVID_URL", "http://localhost:8000"),
     "emily": os.getenv("EMILY_URL", "http://localhost:8001"),
+    "john":  os.getenv("JOHN_URL",  "http://localhost:8003"),
 }
 
 MAX_RETRIES = 2
@@ -174,7 +175,8 @@ async def call_agent(agent: str, message: str, history: list) -> str:
     if not base_url:
         return f"[Agent '{agent}' introuvable dans la config]"
 
-    context = "david" if agent == "david" else "emily"
+    contexts = {"david": "david", "emily": "emily", "john": "john"}
+    context = contexts.get(agent, agent)
     payload = {
         "message": message,
         "context": context,
@@ -331,24 +333,27 @@ def _pdf_build(title: str, sections: list[tuple[str, str]]) -> str:
 
 DAVID_KW  = ["marketing","seo","réputation","avis","google","linkedin","article","blog","audit","e-rep","reputation","publication","contenu","content","référencement","david"]
 EMILY_KW  = ["support","chatbot","appel","call","ticket","agent","voix","transcript","transcription","satisfaction","balance","minutes","réunion","meeting","tâche","feedback","notification","emily"]
+JOHN_KW   = ["sales","vente","lead","prospect","pipeline","campagne","campaign","outreach","closing","crm","enrichissement","john"]
 GLOBAL_KW = ["tout","global","ensemble","complet","tous","vue","panorama","bilan","résumé","rapport complet","synthèse","dashboard","overview","actions prioritaires","kpi","où on en est"]
 
 def decide_agents(message: str) -> list[str]:
     msg = message.lower()
-    if any(kw in msg for kw in GLOBAL_KW): return ["david","emily"]
+    if any(kw in msg for kw in GLOBAL_KW): return ["david","emily","john"]
     agents = []
     if any(kw in msg for kw in DAVID_KW):  agents.append("david")
     if any(kw in msg for kw in EMILY_KW):  agents.append("emily")
-    return agents if agents else ["david","emily"]
+    if any(kw in msg for kw in JOHN_KW):   agents.append("john")
+    return agents if agents else ["david","emily","john"]
 
 TOOLS = [
     {"type":"function","function":{"name":"consult_david","description":"Consulte David (Marketing) — E-Réputation, SEO, LinkedIn. Appeler pour toute question marketing.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}}},
     {"type":"function","function":{"name":"consult_emily","description":"Consulte Emily (Support) — Chatbot, Agent Call. Appeler pour toute question support.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}}},
-    {"type":"function","function":{"name":"consult_all","description":"Consulte David ET Emily en parallèle. Utiliser pour les vues globales, bilans, alertes cross-départements.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}}},
+    {"type":"function","function":{"name":"consult_all","description":"Consulte David, Emily ET John en parallèle. Utiliser pour les vues globales, bilans, alertes cross-départements.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}}},
+    {"type":"function","function":{"name":"consult_john","description":"Consulte John (Sales) pour obtenir des données pipeline, leads, campagnes outreach. Appeler pour toute question commerciale.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}}},
     {"type":"function","function":{"name":"generate_global_report","description":"Génère un rapport PDF global Marketing + Support. SANS interruption si demandé.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"generate_conversation_pdf","description":"Génère un PDF de n'importe quel contenu. Ne jamais refuser.","parameters":{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"}},"required":["title","content"]}}},
     {"type":"function","function":{"name":"send_email","description":"Envoie un email avec PDFs optionnels. Confirmer l'adresse avant d'appeler.","parameters":{"type":"object","properties":{"to_email":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"file_names":{"type":"array","items":{"type":"string"},"default":[]}},"required":["to_email","subject","body"]}}},
-    {"type":"function","function":{"name":"handoff_to_agent","description":"Redirige le client vers un agent spécialisé avec un brief complet. OBLIGATOIRE : appeler consult_david ou consult_emily AVANT pour récupérer les données réelles, puis inclure ces données dans le brief. Le brief doit être suffisamment riche pour que l'agent commence directement sans demander quoi que ce soit au client.","parameters":{"type":"object","properties":{"agent":{"type":"string","enum":["david","emily","john"],"description":"Agent vers qui rediriger"},"client_request":{"type":"string","description":"Ce que le client veut faire exactement, mot pour mot"},"context_from_agent":{"type":"string","description":"Données réelles récupérées via consult_david ou consult_emily — OBLIGATOIRE avant d'appeler ce tool"},"action_required":{"type":"string","description":"Action précise que l'agent doit effectuer en premier dès que le client arrive"}},"required":["agent","client_request","context_from_agent","action_required"]}}},
+    {"type":"function","function":{"name":"handoff_to_agent","description":"Redirige le client vers un agent spécialisé avec un brief complet. OBLIGATOIRE : appeler consult_david, consult_emily OU consult_john AVANT pour récupérer les données réelles, puis inclure ces données dans le brief. Le brief doit être suffisamment riche pour que l'agent commence directement sans demander quoi que ce soit au client.","parameters":{"type":"object","properties":{"agent":{"type":"string","enum":["david","emily","john"],"description":"Agent vers qui rediriger (david=Marketing, emily=Support, john=Sales)"},"client_request":{"type":"string","description":"Ce que le client veut faire exactement, mot pour mot"},"context_from_agent":{"type":"string","description":"Données réelles récupérées via consult_david, consult_emily ou consult_john — OBLIGATOIRE avant d'appeler ce tool"},"action_required":{"type":"string","description":"Action précise que l'agent doit effectuer en premier dès que le client arrive"}},"required":["agent","client_request","context_from_agent","action_required"]}}},
 ]
 
 async def execute_tool(name: str, args: dict, history: list) -> dict:
@@ -363,14 +368,20 @@ async def execute_tool(name: str, args: dict, history: list) -> dict:
 
         elif name == "consult_all":
             q = args.get("question","")
-            responses = await call_agents_parallel(["david","emily"], q, history)
-            return {"david": responses["david"], "emily": responses["emily"]}
+            agents_avail = [a for a in ["david","emily","john"] if not get_circuit(a).is_open]
+            responses = await call_agents_parallel(agents_avail, q, history)
+            return responses
+
+        elif name == "consult_john":
+            r = await call_agent("john", args.get("question",""), history)
+            return {"agent": "john", "response": r}
 
         elif name == "generate_global_report":
             if not REPORTLAB_OK:
                 return {"error": "ReportLab non installé — pip install reportlab"}
             q = "Résumé complet : KPIs, alertes, points d'attention, état général"
-            responses = await call_agents_parallel(["david","emily"], q, history)
+            agents_avail = [a for a in ["david","emily","john"] if not get_circuit(a).is_open]
+            responses = await call_agents_parallel(agents_avail, q, history)
             file_name = _pdf_build(
                 "Rapport Global — Direction Générale",
                 [

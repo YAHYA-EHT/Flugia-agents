@@ -4,9 +4,8 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { ArrowUp, Loader2, Plus, PanelLeftClose, MessagesSquare, MessageSquare, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { HandoffPanel, detectHandoff, HANDOFF_STORAGE_KEY } from "@/components/shared/HandoffPanel";
+import { HandoffPanel, detectHandoff } from "@/components/shared/HandoffPanel";
 
-// ── Types ─────────────────────────────────────────────────────
 type Role = "user" | "assistant";
 type SalesContext = "john" | "prospecting" | "campaigns";
 
@@ -28,8 +27,7 @@ interface Conversation {
   messages: { role: Role; content: string }[];
 }
 
-// ── Config ────────────────────────────────────────────────────
-const API = "http://localhost:8002";
+const API = "http://localhost:8003";
 const STORAGE_KEY = "flugia_conversations_sales_v1";
 
 const CTX_CONFIG: Record<SalesContext, { label: string; welcome: string; chips: [string, string][] }> = {
@@ -38,32 +36,25 @@ const CTX_CONFIG: Record<SalesContext, { label: string; welcome: string; chips: 
   campaigns:   { label: "Campaigns",   welcome: "Dans l'espace Campaigns. On regarde l'état des campagnes en cours ?", chips: [["Mes campagnes", "Liste mes campagnes actives"], ["Statistiques", "Donne-moi les statistiques de toutes les campagnes"], ["Détail campagne", "Montre-moi le détail d'une campagne"]] },
 };
 
-// ── localStorage helpers ──────────────────────────────────────
 function loadAllConvs(): Conversation[] {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]"); } catch { return []; }
 }
-
 function saveAllConvs(convs: Conversation[]) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(convs)); } catch {}
 }
-
 function getConvsByContext(ctx: SalesContext): Conversation[] {
   return loadAllConvs().filter(c => c.context === ctx).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
-
 function upsertConv(conv: Conversation) {
-  const all = loadAllConvs().filter(c => c.id !== conv.id);
-  saveAllConvs([conv, ...all]);
+  saveAllConvs([conv, ...loadAllConvs().filter(c => c.id !== conv.id)]);
 }
-
 function deleteConvById(id: string) {
   saveAllConvs(loadAllConvs().filter(c => c.id !== id));
 }
-
-function newConvId() { return `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`; }
+function newConvId() { return `jc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`; }
 
 let seq = 0;
-const uid = () => `m${++seq}_${Date.now()}`;
+const uid = () => `jm${++seq}_${Date.now()}`;
 
 function relTime(iso: string) {
   const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
@@ -81,7 +72,6 @@ function groupConvs(convs: Conversation[]) {
   return ["Aujourd'hui","Hier","Cette semaine","Plus ancien"].filter(k => g[k]).map(k => ({ label: k, items: g[k] }));
 }
 
-// ── ConversationsPanel ────────────────────────────────────────
 function ConversationsPanel({ convs, activeId, open, onToggle, onNew, onSelect, onDelete }: {
   convs: Conversation[]; activeId: string | null; open: boolean;
   onToggle: () => void; onNew: () => void;
@@ -91,7 +81,7 @@ function ConversationsPanel({ convs, activeId, open, onToggle, onNew, onSelect, 
   return (
     <aside className={`relative hidden shrink-0 flex-col overflow-hidden border-r border-gray-100 bg-gray-50/60 transition-[width] duration-300 md:flex ${open ? "w-64" : "w-12"}`}>
       <div className={`absolute inset-0 flex flex-col items-center gap-2 py-3 transition-opacity ${open ? "pointer-events-none opacity-0" : "opacity-100 delay-150"}`}>
-        <button onClick={onToggle} className="flex h-9 w-9 items-center justify-center rounded-lg bg-white shadow-sm text-slate-500 hover:text-[#4cc9f0]"><MessagesSquare className="h-4 w-4" /></button>
+        <button onClick={onToggle} className="flex h-9 w-9 items-center justify-center rounded-lg bg-white shadow-sm text-slate-500 hover:text-cyan-400"><MessagesSquare className="h-4 w-4" /></button>
         <button onClick={onNew} className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#4cc9f0] text-white hover:opacity-90"><Plus className="h-4 w-4" /></button>
       </div>
       <div className={`absolute inset-0 flex min-w-64 flex-col transition-opacity ${open ? "opacity-100 delay-150" : "pointer-events-none opacity-0"}`}>
@@ -137,13 +127,12 @@ function ConversationsPanel({ convs, activeId, open, onToggle, onNew, onSelect, 
   );
 }
 
-// ── Bubble ────────────────────────────────────────────────────
 function Bubble({ msg }: { msg: Message }) {
   const isUser = msg.role === "user";
   return (
     <div className={`flex items-start gap-2.5 px-4 py-1.5 ${isUser ? "justify-end" : "justify-start"}`}>
       {!isUser && (
-        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#4cc9f0] to-[#4361ee] text-xs font-black text-white">J</div>
+        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-black text-white" style={{ background: "linear-gradient(135deg, #06b6d4, #0891b2)" }}>J</div>
       )}
       <div className={`flex max-w-[78%] flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
         {msg.tools && msg.tools.length > 0 && (
@@ -157,18 +146,13 @@ function Bubble({ msg }: { msg: Message }) {
         )}
         <div className={`rounded-2xl px-4 py-2.5 text-[14px] leading-relaxed ${isUser ? "bg-[#4361ee] text-white rounded-tr-sm" : "bg-white text-slate-900 shadow-sm ring-1 ring-slate-100 rounded-tl-sm"}`}>
           {msg.pending ? (
-            msg.content ? (
-              <><span className="md-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown></span><span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-slate-400" /></>
-            ) : (
-              <span className="flex items-center gap-1 py-0.5">
-                {[0,150,300].map(d => <span key={d} className="h-1.5 w-1.5 rounded-full bg-slate-300 animate-bounce" style={{ animationDelay: `${d}ms` }} />)}
-              </span>
-            )
-          ) : isUser ? (
-            <span className="whitespace-pre-wrap">{msg.content}</span>
-          ) : (
-            <span className="md-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown></span>
-          )}
+            msg.content
+              ? <><span className="md-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown></span><span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-slate-400" /></>
+              : <span className="flex items-center gap-1 py-0.5">{[0,150,300].map(d => <span key={d} className="h-1.5 w-1.5 rounded-full bg-slate-300 animate-bounce" style={{ animationDelay: `${d}ms` }} />)}</span>
+          ) : isUser
+            ? <span className="whitespace-pre-wrap">{msg.content}</span>
+            : <span className="md-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown></span>
+          }
         </div>
         {msg.downloadUrl && (
           <a href={msg.downloadUrl} download={msg.fileName} target="_blank" rel="noopener noreferrer"
@@ -188,25 +172,25 @@ function Bubble({ msg }: { msg: Message }) {
   );
 }
 
-// ── Main ──────────────────────────────────────────────────────
 export function JohnChatScreen({ context }: { context: SalesContext }) {
   const cfg = CTX_CONFIG[context];
 
-  const [msgs, setMsgs] = useState<Message[]>([]);
-  const [convId, setConvId] = useState<string | null>(null);
-  const [convs, setConvs] = useState<Conversation[]>([]);
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [msgs, setMsgs]           = useState<Message[]>([]);
+  const [convId, setConvId]       = useState<string | null>(null);
+  const [convs, setConvs]         = useState<Conversation[]>([]);
+  const [text, setText]           = useState("");
+  const [busy, setBusy]           = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [handoffTarget, setHandoffTarget] = useState<string | null>(null);
-  const [handoffQuestion, setHandoffQuestion] = useState<string>("");
 
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const xhrRef = useRef<XMLHttpRequest | null>(null);
-  // Keep a mutable ref to current messages for saving after XHR completes
-  const msgsRef = useRef<Message[]>([]);
-  const convIdRef = useRef<string | null>(null);
+  const bottomRef      = useRef<HTMLDivElement>(null);
+  const xhrRef         = useRef<XMLHttpRequest | null>(null);
+  const msgsRef        = useRef<Message[]>([]);
+  const convIdRef      = useRef<string | null>(null);
+  const downloadUrlRef = useRef<string>("");
+  const fileNameRef    = useRef<string>("");
+  const handoffRef     = useRef<{ agent: string; brief: string } | null>(null);
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
@@ -216,13 +200,31 @@ export function JohnChatScreen({ context }: { context: SalesContext }) {
     setConvs(getConvsByContext(context));
   }, [context]);
 
-  // Init: load conversations from localStorage and open latest
   useEffect(() => {
     xhrRef.current?.abort();
     setBusy(false);
     setText("");
     const list = getConvsByContext(context);
     setConvs(list);
+
+    // Brief de handoff envoyé par Roger/David/Emily ?
+    try {
+      const briefRaw = localStorage.getItem("flugia_handoff_brief_john");
+      if (briefRaw) {
+        const { brief, timestamp } = JSON.parse(briefRaw);
+        if (Date.now() - timestamp < 5 * 60 * 1000 && brief) {
+          localStorage.removeItem("flugia_handoff_brief_john");
+          localStorage.removeItem("flugia_handoff_brief_david");
+          localStorage.removeItem("flugia_handoff_brief_emily");
+          localStorage.removeItem("flugia_handoff_brief_roger");
+          setMsgs([]); setConvId(null);
+          msgsRef.current = []; convIdRef.current = null;
+          setTimeout(() => send(brief), 600);
+          return;
+        }
+      }
+    } catch { /* silent */ }
+
     if (list.length > 0) {
       const latest = list[0];
       const restored: Message[] = latest.messages.map(m => ({ id: uid(), role: m.role, content: m.content }));
@@ -240,39 +242,17 @@ export function JohnChatScreen({ context }: { context: SalesContext }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [context]);
 
-  // Consume a pending handoff question (set by another agent's redirect), once per mount.
-  // Runs after the context-init effect above so its setText(question) isn't wiped by setText("").
-  useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem(HANDOFF_STORAGE_KEY);
-      if (raw) {
-        const { question } = JSON.parse(raw);
-        if (question) setText(question);
-        // Deferred so React Strict Mode's double-invoke (dev only) can still
-        // read the value on its second pass before it's actually removed.
-        setTimeout(() => sessionStorage.removeItem(HANDOFF_STORAGE_KEY), 0);
-      }
-    } catch { /* ignore malformed/missing storage */ }
-  }, []);
-
   const newConv = useCallback(() => {
     xhrRef.current?.abort();
-    setBusy(false);
-    setMsgs([]);
-    setText("");
-    setConvId(null);
-    msgsRef.current = [];
-    convIdRef.current = null;
+    setBusy(false); setMsgs([]); setText(""); setConvId(null);
+    msgsRef.current = []; convIdRef.current = null;
   }, []);
 
   const selectConv = useCallback((c: Conversation) => {
-    xhrRef.current?.abort();
-    setBusy(false);
+    xhrRef.current?.abort(); setBusy(false);
     const restored: Message[] = c.messages.map(m => ({ id: uid(), role: m.role, content: m.content }));
-    setMsgs(restored);
-    setConvId(c.id);
-    msgsRef.current = restored;
-    convIdRef.current = c.id;
+    setMsgs(restored); setConvId(c.id);
+    msgsRef.current = restored; convIdRef.current = c.id;
     setPanelOpen(false);
     setTimeout(() => bottomRef.current?.scrollIntoView(), 80);
   }, []);
@@ -286,71 +266,50 @@ export function JohnChatScreen({ context }: { context: SalesContext }) {
   const send = useCallback((userText: string) => {
     const trimmed = userText.trim();
     if (!trimmed || busy) return;
-    setText("");
-    setBusy(true);
+    setText(""); setBusy(true);
 
     const userMsg: Message = { id: uid(), role: "user", content: trimmed };
     const aId = uid();
     const aMsg: Message = { id: aId, role: "assistant", content: "", pending: true };
-
     const newMsgs = [...msgsRef.current, userMsg, aMsg];
-    setMsgs(newMsgs);
-    msgsRef.current = newMsgs;
+    setMsgs(newMsgs); msgsRef.current = newMsgs;
     scrollToBottom();
 
-    // History to send = all previous messages (no pending)
     const history = msgsRef.current
       .filter(m => !m.pending && m.id !== aId)
       .map(m => ({ role: m.role, content: m.content }));
 
     let accumulated = "";
+    downloadUrlRef.current = "";
+    fileNameRef.current = "";
+    handoffRef.current = null;
     const tools: string[] = [];
 
-    const patch = (upd: Partial<Message>) => {
+    const patch = (upd: Partial<Message>) =>
       setMsgs(prev => {
         const updated = prev.map(m => m.id === aId ? { ...m, ...upd } : m);
-        msgsRef.current = updated;
-        return updated;
+        msgsRef.current = updated; return updated;
       });
-    };
 
     const saveConversation = (finalContent: string) => {
-      // Build the final messages list (replace pending assistant with final)
       const finalMsgs = msgsRef.current
         .filter(m => !m.pending)
         .map(m => ({ role: m.role, content: m.content }));
-
-      // If assistant message exists but wasn't finalized yet, add it
-      const hasAssistant = finalMsgs.some((m, i) => i === finalMsgs.length - 1 && m.role === "assistant" && m.content === finalContent);
-      const toSave = hasAssistant ? finalMsgs : [...finalMsgs.filter(m => m.content !== "" || m.role === "user")];
-
       const cid = convIdRef.current ?? newConvId();
-      convIdRef.current = cid;
-      setConvId(cid);
-
-      const title = trimmed.slice(0, 55) + (trimmed.length > 55 ? "…" : "");
-      const conv: Conversation = {
-        id: cid,
-        context,
-        title,
-        updatedAt: new Date().toISOString(),
-        messages: toSave,
-      };
-      upsertConv(conv);
+      convIdRef.current = cid; setConvId(cid);
+      upsertConv({ id: cid, context, title: trimmed.slice(0, 55) + (trimmed.length > 55 ? "…" : ""),
+                   updatedAt: new Date().toISOString(), messages: finalMsgs });
       refreshConvs();
     };
 
     const xhr = new XMLHttpRequest();
     xhrRef.current = xhr;
     let processed = 0;
-    let capturedDownloadUrl = "";
-    let capturedFileName = "";
 
     xhr.onprogress = () => {
       const chunk = xhr.responseText.slice(processed);
       processed = xhr.responseText.length;
-      const lines = chunk.split("\n");
-      for (const line of lines) {
+      for (const line of chunk.split("\n")) {
         const t = line.trim();
         if (!t.startsWith("data:")) continue;
         const raw = t.slice(5).trim();
@@ -358,104 +317,88 @@ export function JohnChatScreen({ context }: { context: SalesContext }) {
         try {
           const evt = JSON.parse(raw);
           switch (evt.type) {
-            case "token":
-            case "delta":
+            case "token": case "delta":
               accumulated += (evt.text ?? evt.content ?? "");
-              patch({ content: accumulated, pending: true });
-              break;
-            case "tool_end":
+              patch({ content: accumulated, pending: true }); break;
+            case "tool_start":
               tools.push(evt.tool ?? "");
-              patch({ tools: [...tools] });
+              patch({ tools: [...tools] }); break;
+            case "tool_end":
               if (evt.data?.download_url) {
-                capturedDownloadUrl = `${API}${evt.data.download_url}`;
-                capturedFileName = evt.data.file_name ?? "rapport.pdf";
-                patch({ downloadUrl: capturedDownloadUrl, fileName: capturedFileName });
+                downloadUrlRef.current = `${API}${evt.data.download_url}`;
+                fileNameRef.current    = evt.data.file_name ?? "rapport.pdf";
+                patch({ downloadUrl: downloadUrlRef.current, fileName: fileNameRef.current });
               }
               break;
-            case "done":
-              patch({ content: accumulated, pending: false });
+            case "handoff":
+              handoffRef.current = { agent: evt.agent, brief: evt.brief ?? "" };
               break;
+            case "done":
+              patch({ content: accumulated, pending: false }); break;
           }
         } catch { /* bad json */ }
       }
     };
 
     xhr.onload = () => {
-      // Finalize assistant message
       const finalContent = accumulated || "…";
-      patch({
-        content: finalContent, pending: false,
-        ...(capturedDownloadUrl ? { downloadUrl: capturedDownloadUrl, fileName: capturedFileName } : {}),
-      });
-
-      // Update msgsRef with the final state
       const finalized = msgsRef.current.map(m =>
         m.id === aId
           ? { ...m, content: finalContent, pending: false,
-              ...(capturedDownloadUrl ? { downloadUrl: capturedDownloadUrl, fileName: capturedFileName } : {}) }
+              ...(downloadUrlRef.current ? { downloadUrl: downloadUrlRef.current, fileName: fileNameRef.current } : {}) }
           : m
       );
-      msgsRef.current = finalized;
-      setMsgs(finalized);
-
-      // Save to localStorage
+      msgsRef.current = finalized; setMsgs(finalized);
       saveConversation(finalContent);
 
-      // Detect handoff
-      const target = detectHandoff(finalContent, "john");
-      if (target) {
-        setHandoffQuestion(trimmed);
-        setTimeout(() => setHandoffTarget(target), 800);
+      if (handoffRef.current) {
+        try {
+          localStorage.removeItem("flugia_handoff_brief_david");
+          localStorage.removeItem("flugia_handoff_brief_emily");
+          localStorage.removeItem("flugia_handoff_brief_john");
+          localStorage.removeItem("flugia_handoff_brief_roger");
+          localStorage.setItem(
+            `flugia_handoff_brief_${handoffRef.current.agent}`,
+            JSON.stringify({ brief: handoffRef.current.brief, timestamp: Date.now() })
+          );
+        } catch { /* silent */ }
+        setTimeout(() => setHandoffTarget(handoffRef.current!.agent), 800);
+      } else {
+        const target = detectHandoff(finalContent, "john");
+        if (target) setTimeout(() => setHandoffTarget(target), 800);
       }
 
-      setBusy(false);
-      scrollToBottom();
+      setBusy(false); scrollToBottom();
     };
 
-
-    xhr.onerror = () => {
-      patch({ content: "Impossible de joindre le serveur.", pending: false });
-      setBusy(false);
-    };
-
-    xhr.onabort = () => { setBusy(false); };
+    xhr.onerror  = () => { patch({ content: "Impossible de joindre le serveur.", pending: false }); setBusy(false); };
+    xhr.onabort  = () => { setBusy(false); };
 
     xhr.open("POST", `${API}/chat`, true);
     xhr.setRequestHeader("Content-Type", "application/json");
-    xhr.send(JSON.stringify({
-      message: trimmed,
-      history,
-      context,
-      agent: "john",
-      user_id: "flugia_user",
-      conv_id: null,
-    }));
+    xhr.send(JSON.stringify({ message: trimmed, history, context, user_id: "flugia_user" }));
   }, [busy, context, scrollToBottom, refreshConvs]);
-
-  const showWelcome = msgs.length === 0;
 
   return (
     <div className="flex h-full min-h-0">
       <ConversationsPanel
         convs={convs} activeId={convId} open={panelOpen}
-        onToggle={() => setPanelOpen(v => !v)}
-        onNew={newConv}
-        onSelect={selectConv}
-        onDelete={id => setDeleteTarget(id)}
+        onToggle={() => setPanelOpen(v => !v)} onNew={newConv}
+        onSelect={selectConv} onDelete={id => setDeleteTarget(id)}
       />
 
       <div className="flex h-full min-h-0 flex-1 flex-col">
         <div className="flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl py-6">
-            {showWelcome ? (
+            {msgs.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
-                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#4cc9f0] to-[#4361ee] text-xl font-black text-white shadow-lg">J</div>
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl text-xl font-black text-white shadow-lg" style={{ background: "linear-gradient(135deg, #06b6d4, #0891b2)" }}>J</div>
                 <h2 className="mt-4 text-lg font-black text-slate-900">John — {cfg.label}</h2>
                 <p className="mt-1 text-sm text-slate-400">{cfg.welcome}</p>
                 <div className="mt-5 flex flex-wrap justify-center gap-2">
                   {cfg.chips.map(([label, msg]) => (
                     <button key={label} onClick={() => send(msg)}
-                      className="rounded-full border border-slate-200 px-3.5 py-1.5 text-sm text-slate-600 transition hover:border-[#4cc9f0]/40 hover:bg-[#4cc9f0]/5">
+                      className="rounded-full border border-slate-200 px-3.5 py-1.5 text-sm text-slate-600 transition hover:border-cyan-200 hover:bg-cyan-50">
                       {label}
                     </button>
                   ))}
@@ -468,13 +411,13 @@ export function JohnChatScreen({ context }: { context: SalesContext }) {
 
         <div className="border-t border-slate-100">
           <div className="mx-auto w-full max-w-3xl px-4 py-3">
-            <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm focus-within:border-[#4cc9f0] focus-within:ring-2 focus-within:ring-[#4cc9f0]/20 transition">
+            <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm transition focus-within:border-[#4cc9f0] focus-within:ring-2 focus-within:ring-[#4cc9f0]/20">
               <textarea value={text} onChange={e => setText(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(text); } }}
                 rows={1} placeholder="Posez une question à John…"
                 className="max-h-36 flex-1 resize-none bg-transparent py-1.5 text-[14px] outline-none" />
               <button onClick={() => send(text)} disabled={busy || !text.trim()}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#4361ee] text-white transition hover:bg-[#3a52d6] disabled:opacity-40">
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#4cc9f0] text-white transition hover:opacity-90 disabled:opacity-40">
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
               </button>
             </div>
@@ -501,7 +444,6 @@ export function JohnChatScreen({ context }: { context: SalesContext }) {
         targetAgent={handoffTarget}
         onDismiss={() => setHandoffTarget(null)}
         currentAgentName="John"
-        pendingQuestion={handoffQuestion}
       />
     </div>
   );

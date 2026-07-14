@@ -1,6 +1,6 @@
 """
 John Server — AI Sales Manager @ Flugia
-Port: 8002
+Port: 8003
 """
 import os, json, re, asyncio, pathlib, smtplib, uuid
 from typing import AsyncGenerator, Optional
@@ -18,17 +18,15 @@ from pydantic import BaseModel
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
-# ── .env multi-path ───────────────────────────────────────────
 for _ep in [pathlib.Path(__file__).parent/'.env',
             pathlib.Path(__file__).parent.parent/'.env',
             pathlib.Path('.env')]:
     if _ep.exists():
-        load_dotenv(dotenv_path=str(_ep))
-        break
+        load_dotenv(dotenv_path=str(_ep)); break
 else:
     load_dotenv()
 
-# ── ReportLab (PDF) ───────────────────────────────────────────
+# ── ReportLab ─────────────────────────────────────────────────
 try:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
@@ -38,15 +36,13 @@ try:
                                      Table, TableStyle, HRFlowable)
     REPORTLAB_OK = True
     print("[John] ReportLab chargé ✓")
-except ImportError as _rl_err:
+except ImportError as e:
     REPORTLAB_OK = False
-    print(f"[John] ReportLab non disponible: {_rl_err}")
+    print(f"[John] ReportLab non disponible: {e}")
 
-# ── Import api_client ─────────────────────────────────────────
 from api_client import JohnApiClient
 api = JohnApiClient()
 
-# ── Chargement john.md ────────────────────────────────────────
 for _md in [pathlib.Path(__file__).parent/"skills"/"john.md",
             pathlib.Path(__file__).parent/"john.md"]:
     if _md.exists():
@@ -56,7 +52,6 @@ for _md in [pathlib.Path(__file__).parent/"skills"/"john.md",
 else:
     JOHN_BASE_PROMPT = "Tu es John, l'AI Sales Manager de Flugia."
 
-# ── App ───────────────────────────────────────────────────────
 app = FastAPI(title="John — AI Sales Manager")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -64,16 +59,13 @@ REPORTS_DIR = pathlib.Path(__file__).parent / "reports"
 REPORTS_DIR.mkdir(exist_ok=True)
 app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")
 
-# ── Clients ───────────────────────────────────────────────────
 client = AsyncOpenAI(
     base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
     api_key=os.getenv("OPENROUTER_API_KEY"),
 )
-
 MODEL_HAIKU  = "anthropic/claude-haiku-4-5"
 MODEL_SONNET = "anthropic/claude-sonnet-4-6"
 
-# ── SMTP ──────────────────────────────────────────────────────
 SMTP_HOST     = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT     = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER     = os.getenv("SMTP_USER", "")
@@ -101,7 +93,6 @@ def send_email_fn(to_email: str, subject: str, body: str,
         print(f"[SMTP ERROR] {e}"); return False
 
 def send_email_multi_fn(to_email: str, subject: str, body: str, file_names: list) -> bool:
-    """Envoie un email avec plusieurs pièces jointes PDF."""
     try:
         msg = MIMEMultipart()
         msg["From"] = SMTP_FROM; msg["To"] = to_email; msg["Subject"] = subject
@@ -128,18 +119,18 @@ def sanitize_for_json(obj):
     elif isinstance(obj, (str, bool, int, float)) or obj is None: return obj
     return str(obj)
 
-# ── PDF helpers ───────────────────────────────────────────────
+# ── PDF ───────────────────────────────────────────────────────
 def _pdf_styles():
     styles = getSampleStyleSheet()
-    cyan = colors.HexColor("#4cc9f0")
-    navy = colors.HexColor("#0D1B2A")
+    amber = colors.HexColor("#f59e0b")
+    navy  = colors.HexColor("#0D1B2A")
     return (
         styles,
         ParagraphStyle("title",   parent=styles["Heading1"], fontSize=20, textColor=navy, spaceAfter=6),
         ParagraphStyle("sub",     parent=styles["Normal"],   fontSize=10, textColor=colors.HexColor("#4A5568"), spaceAfter=16),
-        ParagraphStyle("section", parent=styles["Heading2"], fontSize=13, textColor=cyan, spaceBefore=16, spaceAfter=8),
+        ParagraphStyle("section", parent=styles["Heading2"], fontSize=13, textColor=amber, spaceBefore=16, spaceAfter=8),
         ParagraphStyle("body",    parent=styles["Normal"],   fontSize=10, leading=16, textColor=navy),
-        cyan, navy
+        amber, navy
     )
 
 def _table_style(navy):
@@ -154,20 +145,19 @@ def _table_style(navy):
     ])
 
 def generate_leads_report_pdf(lists_data: list, leads_data: list) -> tuple[str, str]:
-    """Génère un PDF du rapport leads (listes + prospects enrichis)."""
     file_id   = str(uuid.uuid4())[:8]
     file_name = f"rapport_leads_{file_id}.pdf"
     file_path = str(REPORTS_DIR / file_name)
-    _, title_s, sub_s, section_s, body_s, cyan, navy = _pdf_styles()
+    _, title_s, sub_s, section_s, body_s, amber, navy = _pdf_styles()
     doc = SimpleDocTemplate(file_path, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
     story = [
         Paragraph("Rapport Leads & Prospects", title_s),
         Paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')} — Flugia AI (John)", sub_s),
-        HRFlowable(width="100%", thickness=2, color=cyan, spaceAfter=16),
+        HRFlowable(width="100%", thickness=2, color=amber, spaceAfter=16),
         Paragraph("Listes de leads", section_s),
     ]
     if lists_data:
-        data = [["Nom de la liste", "Nombre de leads"]]
+        data = [["Nom de la liste", "Leads"]]
         for l in lists_data:
             data.append([str(l.get("name", "-")), str(l.get("leads_count", 0))])
         t = Table(data, colWidths=[12*cm, 5*cm])
@@ -175,7 +165,6 @@ def generate_leads_report_pdf(lists_data: list, leads_data: list) -> tuple[str, 
         story.append(t)
     else:
         story.append(Paragraph("Aucune liste de leads.", body_s))
-
     story.append(Spacer(1, 12))
     story.append(Paragraph("Leads enrichis récents", section_s))
     if leads_data:
@@ -188,57 +177,52 @@ def generate_leads_report_pdf(lists_data: list, leads_data: list) -> tuple[str, 
         story.append(t2)
     else:
         story.append(Paragraph("Aucun lead enrichi.", body_s))
-
     doc.build(story)
     return file_name, file_path
 
 def generate_campaigns_report_pdf(campaigns_data: list, stats_data: dict) -> tuple[str, str]:
-    """Génère un PDF du rapport campagnes (bilan global + détail)."""
     file_id   = str(uuid.uuid4())[:8]
     file_name = f"rapport_campaigns_{file_id}.pdf"
     file_path = str(REPORTS_DIR / file_name)
-    _, title_s, sub_s, section_s, body_s, cyan, navy = _pdf_styles()
+    _, title_s, sub_s, section_s, body_s, amber, navy = _pdf_styles()
     doc = SimpleDocTemplate(file_path, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
     story = [
         Paragraph("Rapport Campagnes d'Outreach", title_s),
         Paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')} — Flugia AI (John)", sub_s),
-        HRFlowable(width="100%", thickness=2, color=cyan, spaceAfter=16),
+        HRFlowable(width="100%", thickness=2, color=amber, spaceAfter=16),
         Paragraph("Bilan global", section_s),
     ]
     bilan = [
         ["Indicateur", "Valeur"],
-        ["Total campagnes", str(stats_data.get("total_campaigns", 0))],
-        ["Campagnes actives", str(stats_data.get("total_active_campaigns", 0))],
-        ["Total contacts", str(stats_data.get("total_contacts", 0))],
-        ["Emails envoyés", str(stats_data.get("total_emails_sent", 0))],
-        ["Réponses reçues", str(stats_data.get("total_replies", 0))],
+        ["Total campagnes",       str(stats_data.get("total_campaigns", 0))],
+        ["Campagnes actives",     str(stats_data.get("total_active_campaigns", 0))],
+        ["Total contacts",        str(stats_data.get("total_contacts", 0))],
+        ["Emails envoyés",        str(stats_data.get("total_emails_sent", 0))],
+        ["Réponses reçues",       str(stats_data.get("total_replies", 0))],
     ]
     t = Table(bilan, colWidths=[9*cm, 8*cm])
     t.setStyle(_table_style(navy))
     story.append(t)
     story.append(Spacer(1, 12))
-
     story.append(Paragraph("Détail des campagnes", section_s))
     if campaigns_data:
         data2 = [["Nom", "Statut", "Contacts", "Emails envoyés"]]
         for c in campaigns_data:
             stats = c.get("statistics", {})
             data2.append([str(c.get("name","-")), str(c.get("status","-")),
-                          str(stats.get("total_contacts", 0)), str(stats.get("total_emails_sent", 0))])
+                          str(stats.get("total_contacts",0)), str(stats.get("total_emails_sent",0))])
         t2 = Table(data2, colWidths=[7*cm, 4*cm, 3.5*cm, 4*cm])
         t2.setStyle(_table_style(navy))
         story.append(t2)
     else:
         story.append(Paragraph("Aucune campagne.", body_s))
-
     doc.build(story)
     return file_name, file_path
 
 # ── Routing modèle ────────────────────────────────────────────
 SIMPLE_PATTERNS = [
     r"^bonjour\s*!?$", r"^salut\s*!?$", r"^hey\s*!?$", r"^coucou\s*!?$",
-    r"^hi\s*!?$", r"^merci\s*!?$", r"^ok\s*!?$", r"^d'accord\s*!?$",
-    r"^au revoir\s*!?$", r"^bye\s*!?$", r"^ça va\s*\??$", r"^comment ça va\s*\??$",
+    r"^hi\s*!?$", r"^merci\s*!?$", r"^ok\s*!?$", r"^au revoir\s*!?$",
 ]
 
 def route_model(message: str) -> str:
@@ -247,34 +231,38 @@ def route_model(message: str) -> str:
         return MODEL_HAIKU
     return MODEL_SONNET
 
-# ── Contextes ─────────────────────────────────────────────────
 CONTEXT_PROMPTS = {
     "john":        "",
-    "prospecting": "\n\n[FOCUS PROSPECTING : concentre-toi sur les leads et listes de prospects. Appelle get_lead_lists() en priorité si l'historique est vide.]",
-    "campaigns":   "\n\n[FOCUS CAMPAIGNS : concentre-toi sur les campagnes d'outreach. Appelle get_campaigns() en priorité si l'historique est vide.]",
+    "prospecting": "\n\n[FOCUS PROSPECTING : concentre-toi sur les leads. Appelle get_lead_lists() en priorité.]",
+    "campaigns":   "\n\n[FOCUS CAMPAIGNS : concentre-toi sur les campagnes. Appelle get_campaigns() en priorité.]",
 }
 
 # ── Tools ─────────────────────────────────────────────────────
 TOOLS_PROSPECTING = [
-    {"type":"function","function":{"name":"get_lead_lists","description":"Liste toutes les listes de leads (prospects) de la société","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"get_lead_list_details","description":"Détail d'une liste de leads spécifique, avec les leads qu'elle contient","parameters":{"type":"object","properties":{"list_id":{"type":"integer"}},"required":["list_id"]}}},
-    {"type":"function","function":{"name":"get_leads","description":"Récupère les leads (prospects) enrichis de la société, avec filtres optionnels","parameters":{"type":"object","properties":{"search":{"type":"string"},"industry":{"type":"string"},"min_score":{"type":"number"},"per_page":{"type":"integer","default":20}}}}},
-    {"type":"function","function":{"name":"get_prospecting_status","description":"Statut de la feature Prospecting pour la société","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"trigger_lead_enrichment","description":"Lance l'enrichissement approfondi (deep enrichment) d'une liste de leads via le workflow n8n","parameters":{"type":"object","properties":{"person_ids":{"type":"array","items":{"type":"string"}}},"required":["person_ids"]}}},
-    {"type":"function","function":{"name":"generate_leads_report","description":"Génère un rapport PDF des leads (listes + prospects enrichis)","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"send_email","description":"Envoie un email avec signature John. Supporte plusieurs pièces jointes via file_names.","parameters":{"type":"object","properties":{"to_email":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"file_name":{"type":"string","default":""},"file_names":{"type":"array","items":{"type":"string"},"description":"Plusieurs PDFs en un email","default":[]}},"required":["to_email","subject","body"]}}},
+    {"type":"function","function":{"name":"get_lead_lists","description":"Liste toutes les listes de leads","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"get_lead_list_details","description":"Détail d'une liste de leads","parameters":{"type":"object","properties":{"list_id":{"type":"integer"}},"required":["list_id"]}}},
+    {"type":"function","function":{"name":"get_leads","description":"Leads enrichis avec filtres","parameters":{"type":"object","properties":{"search":{"type":"string"},"industry":{"type":"string"},"min_score":{"type":"number"},"per_page":{"type":"integer","default":20}}}}},
+    {"type":"function","function":{"name":"get_prospecting_status","description":"Statut feature Prospecting","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"trigger_lead_enrichment","description":"Lance l'enrichissement de leads. OBLIGATOIRE : confirmer avec le client avant d'appeler.","parameters":{"type":"object","properties":{"person_ids":{"type":"array","items":{"type":"string"}}},"required":["person_ids"]}}},
+    {"type":"function","function":{"name":"generate_leads_report","description":"Génère un PDF rapport leads — SANS interruption si demandé.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"send_email","description":"Envoie email avec PDFs. Confirmer adresse avant. Plusieurs PDFs → file_names=[...].","parameters":{"type":"object","properties":{"to_email":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"file_name":{"type":"string","default":""},"file_names":{"type":"array","items":{"type":"string"},"default":[]}},"required":["to_email","subject","body"]}}},
+    {"type":"function","function":{"name":"generate_conversation_pdf","description":"Génère un PDF de n'importe quel contenu — synthèse, analyse, plan d'action commercial. Ne jamais refuser.","parameters":{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"}},"required":["title","content"]}}},
+    {"type":"function","function":{"name":"handoff_to_agent","description":"Redirige vers David (marketing), Emily (support) ou Roger (global) avec brief complet.","parameters":{"type":"object","properties":{"agent":{"type":"string","enum":["david","emily","roger"]},"client_request":{"type":"string"},"context_summary":{"type":"string"},"action_required":{"type":"string"}},"required":["agent","client_request","action_required"]}}},
 ]
 
 TOOLS_CAMPAIGNS = [
-    {"type":"function","function":{"name":"get_campaigns","description":"Liste les campagnes d'outreach/prospection par email","parameters":{"type":"object","properties":{"status":{"type":"string","enum":["draft","active","paused","completed","archived"]}}}}},
-    {"type":"function","function":{"name":"get_campaign","description":"Détail complet d'une campagne d'outreach : contacts, statut d'envoi, statistiques","parameters":{"type":"object","properties":{"campaign_id":{"type":"integer"}},"required":["campaign_id"]}}},
-    {"type":"function","function":{"name":"get_campaign_statistics","description":"Statistiques agrégées de toutes les campagnes : total, actives, contacts, emails envoyés, taux de réponse","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"update_campaign_status","description":"Active ou met en pause une campagne. Passer à 'active' déclenche l'envoi immédiat des emails dus.","parameters":{"type":"object","properties":{"campaign_id":{"type":"integer"},"status":{"type":"string","enum":["active","paused"]}},"required":["campaign_id","status"]}}},
-    {"type":"function","function":{"name":"generate_campaigns_report","description":"Génère un rapport PDF des campagnes (statuts, statistiques, contacts, emails envoyés)","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"send_email","description":"Envoie un email avec signature John. Supporte plusieurs pièces jointes via file_names.","parameters":{"type":"object","properties":{"to_email":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"file_name":{"type":"string","default":""},"file_names":{"type":"array","items":{"type":"string"},"description":"Plusieurs PDFs en un email","default":[]}},"required":["to_email","subject","body"]}}},
+    {"type":"function","function":{"name":"get_campaigns","description":"Liste les campagnes","parameters":{"type":"object","properties":{"status":{"type":"string","enum":["draft","active","paused","completed","archived"]}}}}},
+    {"type":"function","function":{"name":"get_campaign","description":"Détail campagne","parameters":{"type":"object","properties":{"campaign_id":{"type":"integer"}},"required":["campaign_id"]}}},
+    {"type":"function","function":{"name":"get_campaign_statistics","description":"Stats globales campagnes","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"update_campaign_status","description":"Active/pause campagne. Activer = envoi réel d'emails. OBLIGATOIRE : confirmer avant.","parameters":{"type":"object","properties":{"campaign_id":{"type":"integer"},"status":{"type":"string","enum":["active","paused"]}},"required":["campaign_id","status"]}}},
+    {"type":"function","function":{"name":"generate_campaigns_report","description":"Génère PDF rapport campagnes — SANS interruption.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"send_email","description":"Envoie email avec PDFs. Confirmer adresse avant.","parameters":{"type":"object","properties":{"to_email":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"file_name":{"type":"string","default":""},"file_names":{"type":"array","items":{"type":"string"},"default":[]}},"required":["to_email","subject","body"]}}},
+    {"type":"function","function":{"name":"generate_conversation_pdf","description":"Génère un PDF de n'importe quel contenu. Ne jamais refuser.","parameters":{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"}},"required":["title","content"]}}},
+    {"type":"function","function":{"name":"handoff_to_agent","description":"Redirige vers David (marketing), Emily (support) ou Roger (global).","parameters":{"type":"object","properties":{"agent":{"type":"string","enum":["david","emily","roger"]},"client_request":{"type":"string"},"context_summary":{"type":"string"},"action_required":{"type":"string"}},"required":["agent","client_request","action_required"]}}},
 ]
 
-TOOLS_ALL = TOOLS_PROSPECTING + [t for t in TOOLS_CAMPAIGNS if t["function"]["name"] not in {t2["function"]["name"] for t2 in TOOLS_PROSPECTING}]
+TOOLS_ALL = TOOLS_PROSPECTING + [t for t in TOOLS_CAMPAIGNS
+            if t["function"]["name"] not in {t2["function"]["name"] for t2 in TOOLS_PROSPECTING}]
 TOOLS_BY_CONTEXT = {"john": TOOLS_ALL, "prospecting": TOOLS_PROSPECTING, "campaigns": TOOLS_CAMPAIGNS}
 
 # ── execute_tool ──────────────────────────────────────────────
@@ -282,90 +270,128 @@ async def execute_tool(name: str, args: dict) -> dict:
     try:
         clean = {k: v for k, v in args.items() if v is not None}
 
-        # ── Prospecting ───────────────────────────────────────
         if name == "get_lead_lists":
-            result = await api.get_lead_lists()
+            return sanitize_for_json(await api.get_lead_lists())
         elif name == "get_lead_list_details":
-            result = await api.get_lead_list_details(list_id=clean["list_id"])
+            return sanitize_for_json(await api.get_lead_list_details(list_id=clean["list_id"]))
         elif name == "get_leads":
-            result = await api.get_leads(**clean)
+            return sanitize_for_json(await api.get_leads(**clean))
         elif name == "get_prospecting_status":
-            result = await api.get_prospecting_status()
+            return sanitize_for_json(await api.get_prospecting_status())
         elif name == "trigger_lead_enrichment":
-            result = await api.trigger_lead_enrichment(person_ids=clean["person_ids"])
+            return sanitize_for_json(await api.trigger_lead_enrichment(person_ids=clean["person_ids"]))
+        elif name == "get_campaigns":
+            return sanitize_for_json(await api.get_campaigns(**clean))
+        elif name == "get_campaign":
+            return sanitize_for_json(await api.get_campaign(campaign_id=clean["campaign_id"]))
+        elif name == "get_campaign_statistics":
+            return sanitize_for_json(await api.get_campaign_statistics())
+        elif name == "update_campaign_status":
+            return sanitize_for_json(await api.update_campaign_status(
+                campaign_id=clean["campaign_id"], status=clean["status"]))
+
         elif name == "generate_leads_report":
             if not REPORTLAB_OK:
-                result = {"success": False, "error": "reportlab non installé"}
-            else:
-                lists_res = await api.get_lead_lists()
-                leads_res = await api.get_leads(per_page=50)
-                lists_data = lists_res.get("data", []) if lists_res.get("success") else []
-                leads_data = leads_res.get("data", []) if leads_res.get("success") else []
-                file_name, _ = generate_leads_report_pdf(lists_data, leads_data)
-                result = {
-                    "success": True, "file_name": file_name, "download_url": f"/reports/{file_name}",
-                    "message": f"Rapport leads généré : {len(lists_data)} liste(s), {len(leads_data)} lead(s)."
-                }
+                return {"success": False, "error": "reportlab non installé"}
+            lists_res = await api.get_lead_lists()
+            leads_res = await api.get_leads(per_page=50)
+            lists_data = lists_res.get("data", []) if lists_res.get("success") else []
+            leads_data = leads_res.get("data", []) if leads_res.get("success") else []
+            file_name, _ = generate_leads_report_pdf(lists_data, leads_data)
+            return {"success": True, "file_name": file_name,
+                    "download_url": f"/reports/{file_name}",
+                    "message": f"Rapport leads : {len(lists_data)} liste(s), {len(leads_data)} lead(s)."}
 
-        # ── Campaigns ──────────────────────────────────────────
-        elif name == "get_campaigns":
-            result = await api.get_campaigns(**clean)
-        elif name == "get_campaign":
-            result = await api.get_campaign(campaign_id=clean["campaign_id"])
-        elif name == "get_campaign_statistics":
-            result = await api.get_campaign_statistics()
-        elif name == "update_campaign_status":
-            result = await api.update_campaign_status(campaign_id=clean["campaign_id"], status=clean["status"])
         elif name == "generate_campaigns_report":
             if not REPORTLAB_OK:
-                result = {"success": False, "error": "reportlab non installé"}
-            else:
-                camps_res = await api.get_campaigns()
-                stats_res = await api.get_campaign_statistics()
-                camps_data = camps_res.get("data", []) if camps_res.get("success") else []
-                stats_data = stats_res.get("data", {}) if stats_res.get("success") else {}
-                file_name, _ = generate_campaigns_report_pdf(camps_data, stats_data)
-                result = {
-                    "success": True, "file_name": file_name, "download_url": f"/reports/{file_name}",
-                    "message": f"Rapport campagnes généré : {len(camps_data)} campagne(s)."
-                }
+                return {"success": False, "error": "reportlab non installé"}
+            camps_res = await api.get_campaigns()
+            stats_res = await api.get_campaign_statistics()
+            camps_data = camps_res.get("data", []) if camps_res.get("success") else []
+            stats_data = stats_res.get("data", {}) if stats_res.get("success") else {}
+            file_name, _ = generate_campaigns_report_pdf(camps_data, stats_data)
+            return {"success": True, "file_name": file_name,
+                    "download_url": f"/reports/{file_name}",
+                    "message": f"Rapport campagnes : {len(camps_data)} campagne(s)."}
 
-        # ── Email ────────────────────────────────────────────
         elif name == "send_email":
-            to_email  = clean.get("to_email", "")
-            subject   = clean.get("subject", "Message de John — Flugia")
-            body_text = clean.get("body", "")
+            to_email   = clean.get("to_email", "")
+            subject    = clean.get("subject", "Message de John — Flugia")
+            body_text  = clean.get("body", "")
             file_names = clean.get("file_names", [])
             if not file_names and clean.get("file_name"):
                 file_names = [clean["file_name"]]
-
             if not to_email:
-                result = {"success": False, "error": "Adresse email manquante — demander au client son adresse"}
+                return {"success": False, "error": "Adresse email manquante"}
+            html_body = (
+                f"<p>{body_text.replace(chr(10), '<br>')}</p>"
+                "<br><hr style='border:none;border-top:1px solid #E8EDF2;margin:20px 0'>"
+                "<p style='color:#8896A5;font-size:12px'>"
+                "<strong>John</strong> — AI Sales Manager<br>Flugia · Propulsé par l'IA</p>"
+            )
+            if file_names:
+                missing = [fn for fn in file_names if not (REPORTS_DIR / fn).exists()]
+                if missing:
+                    return {"success": False, "error": f"Fichiers introuvables : {missing}"}
+                success = send_email_multi_fn(to_email, subject, html_body, file_names)
+                return {"success": success, "to_email": to_email, "attachments": file_names,
+                        "message": f"Email avec {len(file_names)} rapport(s) envoyé" if success else "Erreur SMTP"}
             else:
-                html_body = (
-                    f"<p>{body_text.replace(chr(10), '<br>')}</p>"
-                    "<br><hr style='border:none;border-top:1px solid #E8EDF2;margin:20px 0'>"
-                    "<p style='color:#8896A5;font-size:12px'>"
-                    "<strong>John</strong> — AI Sales Manager<br>"
-                    "Flugia · Propulsé par l'IA</p>"
-                )
-                if file_names:
-                    missing = [fn for fn in file_names if not (REPORTS_DIR / fn).exists()]
-                    if missing:
-                        result = {"success": False, "error": f"Fichiers introuvables : {missing}"}
-                    else:
-                        success = send_email_multi_fn(to_email, subject, html_body, file_names)
-                        result = {"success": success, "to_email": to_email, "attachments": file_names,
-                                  "message": f"Email avec {len(file_names)} rapport(s) envoyé à {to_email}" if success else "Erreur SMTP"}
-                else:
-                    success = send_email_fn(to_email, subject, html_body)
-                    result = {"success": success, "to_email": to_email,
-                              "message": f"Email envoyé à {to_email}" if success else "Erreur SMTP"}
+                success = send_email_fn(to_email, subject, html_body)
+                return {"success": success, "to_email": to_email,
+                        "message": f"Email envoyé à {to_email}" if success else "Erreur SMTP"}
+
+        elif name == "generate_conversation_pdf":
+            if not REPORTLAB_OK:
+                return {"error": "ReportLab non installé"}
+            title_text   = clean.get("title", "Document Sales")
+            content_text = clean.get("content", "")
+            file_id      = str(uuid.uuid4())[:8]
+            file_name    = f"document_john_{file_id}.pdf"
+            file_path    = str(REPORTS_DIR / file_name)
+            _, title_s, sub_s, section_s, body_s, amber, navy = _pdf_styles()
+            doc = SimpleDocTemplate(file_path, pagesize=A4,
+                rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
+            story = [
+                Paragraph(title_text, title_s),
+                Paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')} — Flugia AI (John)", sub_s),
+                HRFlowable(width="100%", thickness=2, color=amber, spaceAfter=14),
+            ]
+            for para in content_text.split("\n"):
+                p = para.strip()
+                if p:
+                    story.append(Paragraph(p.replace("•", "–").replace("**", ""), body_s))
+                    story.append(Spacer(1, 3))
+            doc.build(story)
+            return {"success": True, "download_url": f"/reports/{file_name}",
+                    "file_name": file_name, "title": title_text}
+
+        elif name == "handoff_to_agent":
+            agent           = clean.get("agent", "david")
+            client_request  = clean.get("client_request", "")
+            context_summary = clean.get("context_summary", "")
+            action_required = clean.get("action_required", "")
+            lines = [
+                "[CONTEXTE JOHN]",
+                "",
+                "Demande du client :",
+                client_request,
+            ]
+            if context_summary:
+                lines += ["", "Contexte Sales (John) :", context_summary]
+            lines += ["", "Action immédiate :", action_required]
+            return {
+                "success": True,
+                "handoff": True,
+                "agent": agent,
+                "brief": "\n".join(lines),
+            }
 
         else:
-            result = {"error": f"Outil inconnu: {name}"}
-        return sanitize_for_json(result)
+            return {"error": f"Outil inconnu: {name}"}
+
     except Exception as e:
+        import traceback; traceback.print_exc()
         return {"error": str(e), "tool": name}
 
 # ── Request model ─────────────────────────────────────────────
@@ -395,7 +421,6 @@ async def chat(req: ChatRequest):
             selected = route_model(req.message)
             yield f"data: {json.dumps({'type': 'model_selected', 'model': selected})}\n"
 
-            # ── Haiku : réponse directe ───────────────────────
             if selected == MODEL_HAIKU:
                 stream = await client.chat.completions.create(
                     model=MODEL_HAIKU, messages=messages, max_tokens=400, stream=True)
@@ -407,7 +432,6 @@ async def chat(req: ChatRequest):
                 yield f"data: {json.dumps({'type': 'done'})}\n"
                 return
 
-            # ── Sonnet : boucle agentique ─────────────────────
             MAX_ROUNDS = 5
             round_count = 0
 
@@ -438,9 +462,13 @@ async def chat(req: ChatRequest):
                     yield f"data: {json.dumps({'type': 'tool_start', 'tool': tool_name})}\n"
                     await asyncio.sleep(0)
                     result = await execute_tool(tool_name, tool_args)
-                    yield f"data: {json.dumps({'type': 'tool_end', 'tool': tool_name, 'data': result})}\n"
-                    await asyncio.sleep(0)
+                    yield f"data: {json.dumps({'type': 'tool_end', 'tool': tool_name, 'data': sanitize_for_json(result)})}\n"
 
+                    # Handoff event
+                    if result.get("handoff"):
+                        yield f"data: {json.dumps({'type': 'handoff', 'agent': result.get('agent'), 'brief': result.get('brief', '')})}\n"
+
+                    await asyncio.sleep(0)
                     messages.append({"role": "tool", "tool_call_id": tc.id,
                                       "content": json.dumps(sanitize_for_json(result), ensure_ascii=False)})
             else:
@@ -460,28 +488,25 @@ async def chat(req: ChatRequest):
     return StreamingResponse(generate(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-# ── Dashboard endpoints ───────────────────────────────────────
 @app.get("/dashboard/sales")
 async def dashboard_sales():
     try:
         lists     = await api.get_lead_lists()
-        leads     = await api.get_leads(per_page=5)
         campaigns = await api.get_campaigns()
         stats     = await api.get_campaign_statistics()
         return {
             "success": True,
             "lead_lists": lists.get("data", []) if lists.get("success") else [],
-            "leads": leads.get("data", []) if leads.get("success") else [],
-            "campaigns": campaigns.get("data", []) if campaigns.get("success") else [],
-            "stats": stats.get("data", {}) if stats.get("success") else {}
+            "campaigns":  campaigns.get("data", []) if campaigns.get("success") else [],
+            "stats":      stats.get("data", {}) if stats.get("success") else {}
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "agent": "John", "port": 8002}
+    return {"status": "ok", "agent": "John", "port": 8003}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("john:app", host="0.0.0.0", port=8002, reload=True)
+    uvicorn.run("john:app", host="0.0.0.0", port=8003, reload=True)

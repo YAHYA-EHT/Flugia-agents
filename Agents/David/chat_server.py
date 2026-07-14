@@ -875,6 +875,41 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "publish_blog_post",
+            "description": (
+                "Publie un article SEO sur WordPress. "
+                "OBLIGATOIRE : présenter l'action dans un message séparé et attendre confirmation explicite "
+                "avant d'appeler. Ne jamais publier sans confirmation du client."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "post_id": {"type": "integer", "description": "ID de l'article à publier"}
+                },
+                "required": ["post_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "unpublish_blog_post",
+            "description": (
+                "Dépublie un article SEO (remet en draft). "
+                "OBLIGATOIRE : présenter l'action et attendre confirmation explicite avant d'appeler."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "post_id": {"type": "integer", "description": "ID de l'article à dépublier"}
+                },
+                "required": ["post_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "update_blog_post",
             "description": (
                 "Modifie un article SEO existant avant publication. "
@@ -1474,6 +1509,11 @@ async def execute_tool(name: str, args: dict) -> dict:
                 if result.get("success") and result.get("data"):
                     post = result["data"]
                     if post.get("status") == "completed" and REPORTLAB_OK:
+                        from reportlab.lib.pagesizes import A4
+                        from reportlab.lib import colors
+                        from reportlab.lib.units import cm
+                        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
                         file_id = str(uuid.uuid4())[:8]
                         file_name = f"article_seo_{post.get('id', 'x')}_{file_id}.pdf"
                         file_path = REPORTS_DIR / file_name
@@ -1725,6 +1765,26 @@ async def execute_tool(name: str, args: dict) -> dict:
                         f"La régénération a échoué : {result.get('message', 'erreur inconnue')}. "
                         "Vérifie que l article existe bien et est en status failed."
                     )
+            else:
+                result = {"error": "Module SEO non disponible"}
+
+        elif name == "publish_blog_post":
+            if seo_api:
+                post_id = clean.get("post_id")
+                if not post_id:
+                    result = {"error": "post_id manquant"}
+                else:
+                    result = await seo_api.publish_blog_post(post_id)
+            else:
+                result = {"error": "Module SEO non disponible"}
+
+        elif name == "unpublish_blog_post":
+            if seo_api:
+                post_id = clean.get("post_id")
+                if not post_id:
+                    result = {"error": "post_id manquant"}
+                else:
+                    result = await seo_api.unpublish_blog_post(post_id)
             else:
                 result = {"error": "Module SEO non disponible"}
 

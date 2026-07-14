@@ -7,7 +7,7 @@ import { RogerChatScreen } from "./RogerChatScreen";
 
 const API_DAVID  = "http://localhost:8000";
 const API_EMILY  = "http://localhost:8001";
-const API_ROGER  = "http://localhost:8002";
+const API_JOHN   = "http://localhost:8003";
 const PRIMARY    = "#ef4444";
 
 type AgentStatus = "loading" | "online" | "offline";
@@ -25,12 +25,18 @@ const AGENT_CARDS = [
     features: ["Chatbot", "Agent Call", "Transcriptions"],
     url: API_EMILY,
   },
+  {
+    key: "john", name: "John", role: "AI Sales Manager",
+    icon: <TrendingUp className="h-5 w-5" />, color: "#4cc9f0",
+    features: ["Leads", "Pipeline", "Campagnes"],
+    url: API_JOHN,
+  },
 ];
 
 export function RogerOverview({ onBack, onNavigate }: { onBack?: () => void; onNavigate?: (path: string) => void }) {
   const [chatExpanded, setChatExpanded] = useState(false);
   const [agents, setAgents] = useState<Record<string, AgentStatus>>({
-    david: "loading", emily: "loading",
+    david: "loading", emily: "loading", john: "loading",
   });
   const [stats, setStats] = useState([
     { value: "…", label: "Agents en ligne" },
@@ -51,9 +57,9 @@ export function RogerOverview({ onBack, onNavigate }: { onBack?: () => void; onN
       setAgents(results);
       const online = Object.values(results).filter(s => s === "online").length;
       setStats([
-        { value: `${online}/2`, label: "Agents en ligne" },
-        { value: "2", label: "Départements actifs" },
-        { value: online === 2 ? "✓ Opérationnel" : "⚠ Vérifier", label: "Statut global" },
+        { value: `${online}/3`, label: "Agents en ligne" },
+        { value: "3", label: "Départements actifs" },
+        { value: online === 3 ? "✓ Opérationnel" : "⚠ Vérifier", label: "Statut global" },
       ]);
     })();
   }, []);
@@ -149,7 +155,14 @@ export function RogerOverview({ onBack, onNavigate }: { onBack?: () => void; onN
                   return (
                     <div
                       key={agent.key}
-                      onClick={() => onNavigate?.(`/dashboard/${agent.key === "david" ? "marketing" : "support"}`)}
+                      onClick={() => {
+                        const paths: Record<string, string> = {
+                          david: "/dashboard/marketing",
+                          emily: "/dashboard/support",
+                          john:  "/dashboard/sales",
+                        };
+                        onNavigate?.(paths[agent.key] ?? "/dashboard");
+                      }}
                       className="animate-bubble-up flex flex-col gap-3 rounded-2xl border border-slate-100 bg-white p-5 transition-all duration-200 cursor-pointer hover:-translate-y-0.5 hover:shadow-md"
                       style={{ borderColor: `rgba(76,201,240,0.15)` }}
                     >
