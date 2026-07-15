@@ -5,7 +5,7 @@ import { ArrowLeft, Users, Mail, Maximize2, Minimize2, Loader2, TrendingUp } fro
 import { JohnChatScreen } from "./JohnChatScreen";
 
 type SalesFeature = "prospecting" | "campaigns";
-const API = "http://localhost:8002";
+const API = "http://localhost:8003";
 const PRIMARY = "#4cc9f0";
 
 const FEATURE_TABS: { id: SalesFeature; label: string }[] = [
