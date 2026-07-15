@@ -5,7 +5,7 @@ import { useState, useEffect } from "react";
 import { ArrowLeft, TrendingUp, Users, Mail, Maximize2, Minimize2 } from "lucide-react";
 import { JohnChatScreen } from "./JohnChatScreen";
 
-const API = "http://localhost:8002";
+const API = "http://localhost:8003";
 
 const PRIMARY = "#4cc9f0";
 
