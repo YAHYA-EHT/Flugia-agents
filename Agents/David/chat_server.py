@@ -79,55 +79,6 @@ def sanitize_for_json(obj):
     else:
         return obj
 
-# ── Sanitizer contexte LLM ────────────────────────────────────
-_STRIP_FIELDS = {
-    "recording_url", "audio", "audio_url", "audio_base64",
-    "recording", "media_url", "file_url", "file_content",
-    "base64", "binary", "raw_audio",
-}
-_MAX_STR   = 2000   # chars max par champ texte
-_MAX_LIST  = 15     # items max par liste
-_MAX_TOTAL = 80000  # chars max total avant injection LLM
-
-def _clip(obj, _depth=0):
-    """Tronque récursivement un objet pour ne pas exploser le contexte LLM."""
-    if _depth > 6:
-        return "..."
-    if isinstance(obj, dict):
-        return {
-            k: _clip(v, _depth+1)
-            for k, v in obj.items()
-            if k not in _STRIP_FIELDS
-        }
-    if isinstance(obj, list):
-        clipped = [_clip(i, _depth+1) for i in obj[:_MAX_LIST]]
-        if len(obj) > _MAX_LIST:
-            clipped.append(f"... ({len(obj) - _MAX_LIST} éléments supplémentaires non affichés)")
-        return clipped
-    if isinstance(obj, str) and len(obj) > _MAX_STR:
-        return obj[:_MAX_STR] + f"... [tronqué — {len(obj)} chars total]"
-    return obj
-
-def sanitize_result(result: dict) -> dict:
-    """Applique _clip sur le résultat d'un outil avant injection dans le contexte LLM."""
-    clipped = _clip(result)
-    # Vérification finale taille totale
-    import json as _json
-    serialized = _json.dumps(clipped, ensure_ascii=False)
-    if len(serialized) > _MAX_TOTAL:
-        # Tronquer le champ data si trop grand
-        if "data" in clipped:
-            data = clipped["data"]
-            if isinstance(data, list):
-                clipped["data"] = data[:5]
-                clipped["_truncated"] = True
-            elif isinstance(data, dict):
-                clipped["data"] = {k: v for i, (k, v) in enumerate(data.items()) if i < 20}
-                clipped["_truncated"] = True
-    return clipped
-
-
-
 # ── Session Manager (SQLite) ─────────────────────────────────
 DB_PATH = pathlib.Path(__file__).parent / "sessions.db"
 _db_lock = threading.Lock()
@@ -510,9 +461,7 @@ OUTILS SEO DISPONIBLES :
 - get_seo_settings() → config du compte (site, secteur, langue, brand)
 - send_email(to, subject, body, file_name?) → envoyer par email
 
-REDIRECTION (section — réponse courte) :
-Si la demande concerne le Support ou les appels clients → Emily. Si Sales/leads/prospection → John.
-1 phrase max : "Pour ça c'est Emily chez nous." puis handoff_to_agent immédiatement. Pas de brief élaboré.
+DÉBORDEMENT uniquement vers Sales (John) ou Support (Emily) si la demande sort du Marketing.
 """
 
 EREP_CONTEXT = """
@@ -525,9 +474,7 @@ OUTILS E-REPUTATION DISPONIBLES :
 - mark_notification_read, n8n_generate_review_response, n8n_analyze_reviews
 - n8n_collect_reviews, submit_reply, send_email
 
-REDIRECTION (section — réponse courte) :
-Si la demande concerne le Support ou les appels clients → Emily. Si Sales/leads/prospection → John.
-1 phrase max : "Pour ça c'est John chez nous." puis handoff_to_agent immédiatement. Pas de brief élaboré.
+DÉBORDEMENT uniquement vers Sales (John) ou Support (Emily) si la demande sort du Marketing.
 """
 
 LINKEDIN_CONTEXT = """
@@ -536,13 +483,14 @@ Ne dis jamais au client d aller dans un autre espace Marketing — exécute dire
 
 OUTILS LINKEDIN DISPONIBLES :
 - get_linkedin_settings, get_style_guide, get_linkedin_posts, get_linkedin_post
-- get_content_ideas, get_content_idea_session, get_kpi_analyses, get_kpi_analysis, send_email
+- get_content_ideas, get_content_idea_session, get_kpi_analyses, get_kpi_analysis
+- trigger_content_scrape, generate_posts_from_ideas, generate_manual_post
+- edit_linkedin_post, regenerate_linkedin_post, publish_linkedin_post
+- schedule_linkedin_post, cancel_scheduled_post, send_email
 
-Génération, publication et planification de posts ne sont PAS encore câblées — voir règles de comportement.
+publish_linkedin_post et schedule_linkedin_post sont irréversibles/publics — confirmation explicite du client OBLIGATOIRE avant de les appeler.
 
-REDIRECTION (section — réponse courte) :
-Si la demande concerne le Support ou les appels clients → Emily. Si Sales/leads/prospection → John.
-1 phrase max : "Pour ça c'est Emily chez nous." puis handoff_to_agent immédiatement. Pas de brief élaboré.
+DÉBORDEMENT uniquement vers Sales (John) ou Support (Emily) si la demande sort du Marketing.
 """
 
 CONTEXT_PROMPTS = {
@@ -557,9 +505,9 @@ TOOLS_BY_CONTEXT = {
     "david": None,  # None = tous les outils
     # Tous les contextes Marketing ont accès à tous les outils Marketing
     # La distinction contextuelle sert uniquement au prompt — pas aux outils
-"e_reputation": ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "get_linkedin_settings", "get_style_guide", "get_linkedin_posts", "get_linkedin_post", "get_content_ideas", "get_content_idea_session", "get_kpi_analyses", "get_kpi_analysis", "send_email", "handoff_to_agent"],
-    "seo":          ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "get_linkedin_settings", "get_style_guide", "get_linkedin_posts", "get_linkedin_post", "get_content_ideas", "get_content_idea_session", "get_kpi_analyses", "get_kpi_analysis", "send_email", "handoff_to_agent"],
-    "linkedin":     ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "get_linkedin_settings", "get_style_guide", "get_linkedin_posts", "get_linkedin_post", "get_content_ideas", "get_content_idea_session", "get_kpi_analyses", "get_kpi_analysis", "send_email", "handoff_to_agent"],
+    "e_reputation": ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "get_linkedin_settings", "get_style_guide", "get_linkedin_posts", "get_linkedin_post", "get_content_ideas", "get_content_idea_session", "get_kpi_analyses", "get_kpi_analysis", "trigger_content_scrape", "generate_posts_from_ideas", "generate_manual_post", "edit_linkedin_post", "regenerate_linkedin_post", "publish_linkedin_post", "schedule_linkedin_post", "cancel_scheduled_post", "send_email", "handoff_to_agent"],
+    "seo":          ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "get_linkedin_settings", "get_style_guide", "get_linkedin_posts", "get_linkedin_post", "get_content_ideas", "get_content_idea_session", "get_kpi_analyses", "get_kpi_analysis", "trigger_content_scrape", "generate_posts_from_ideas", "generate_manual_post", "edit_linkedin_post", "regenerate_linkedin_post", "publish_linkedin_post", "schedule_linkedin_post", "cancel_scheduled_post", "send_email", "handoff_to_agent"],
+    "linkedin":     ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "get_linkedin_settings", "get_style_guide", "get_linkedin_posts", "get_linkedin_post", "get_content_ideas", "get_content_idea_session", "get_kpi_analyses", "get_kpi_analysis", "trigger_content_scrape", "generate_posts_from_ideas", "generate_manual_post", "edit_linkedin_post", "regenerate_linkedin_post", "publish_linkedin_post", "schedule_linkedin_post", "cancel_scheduled_post", "send_email", "handoff_to_agent"],
 }
 
 def get_tools_for_context(context: str) -> list:
@@ -1087,6 +1035,126 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "trigger_content_scrape",
+            "description": "Lance une session de scraping de contenu LinkedIn pour trouver des idées de posts dans le secteur du client. Utiliser avant generate_posts_from_ideas si aucune idée n'existe encore.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sector": {"type": "string", "description": "Secteur d'activité pour cibler le scraping"},
+                    "number_of_posts": {"type": "integer", "description": "Nombre d'idées à générer"},
+                    "language": {"type": "string", "description": "Langue cible, ex: fr"},
+                    "client_preferences": {"type": "string", "description": "Préférences ou angle particulier du client"}
+                },
+                "required": ["sector", "number_of_posts", "language"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_posts_from_ideas",
+            "description": "Génère des posts LinkedIn personnalisés à partir d'idées déjà scrapées (voir get_content_ideas pour les IDs disponibles).",
+            "parameters": {
+                "type": "object",
+                "properties": {"idea_ids": {"type": "array", "items": {"type": "integer"}, "description": "IDs des idées à transformer en posts"}},
+                "required": ["idea_ids"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_manual_post",
+            "description": "Crée un post LinkedIn à partir d'un sujet fourni directement par le client, sans passer par le scraper de contenu. Utiliser get_style_guide() au préalable pour respecter le ton de la marque.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "titre": {"type": "string", "description": "Sujet ou titre du post"},
+                    "description": {"type": "string", "description": "Description détaillée du contenu souhaité"},
+                    "language": {"type": "string", "description": "Langue du post, ex: fr"},
+                    "hook_ouverture": {"type": "string", "description": "Accroche d'ouverture du post"},
+                    "structure_suggeree": {"type": "string", "description": "Structure suggérée, ex: Hook → Histoire → CTA"},
+                    "cta": {"type": "string", "description": "Call-to-action final"},
+                    "hashtags": {"type": "string", "description": "Hashtags à inclure"}
+                },
+                "required": ["titre", "description", "language"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_linkedin_post",
+            "description": "Modifie le texte ou l'image d'un post LinkedIn déjà généré, avant publication.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "post_id": {"type": "integer"},
+                    "personalized_post": {"type": "string", "description": "Nouveau texte du post"},
+                    "generated_image_url": {"type": "string", "description": "URL de la nouvelle image, si applicable"}
+                },
+                "required": ["post_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "regenerate_linkedin_post",
+            "description": "Régénère un post LinkedIn en tenant compte d'un retour du client (ton, longueur, angle, etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "post_id": {"type": "integer"},
+                    "feedback": {"type": "string", "description": "Ce que le client veut changer"},
+                    "previous_post": {"type": "string", "description": "Texte actuel du post à régénérer"}
+                },
+                "required": ["post_id", "feedback", "previous_post"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "publish_linkedin_post",
+            "description": "Publie immédiatement un post LinkedIn sur la page de l'entreprise. Action irréversible et publique. OBLIGATOIRE : montrer le texte final au client et obtenir sa confirmation explicite avant d'appeler.",
+            "parameters": {
+                "type": "object",
+                "properties": {"post_id": {"type": "integer"}},
+                "required": ["post_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_linkedin_post",
+            "description": "Planifie la publication future d'un post LinkedIn. OBLIGATOIRE : confirmer le texte final ET la date/heure avec le client avant d'appeler.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "post_id": {"type": "integer"},
+                    "scheduled_at": {"type": "string", "description": "Date et heure de publication au format ISO 8601"}
+                },
+                "required": ["post_id", "scheduled_at"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_scheduled_post",
+            "description": "Annule la planification d'un post LinkedIn — le post repasse en brouillon complété, non publié.",
+            "parameters": {
+                "type": "object",
+                "properties": {"post_id": {"type": "integer"}},
+                "required": ["post_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "send_email",
             "description": (
                 "Envoie un email au client avec un contenu textuel et/ou une pièce jointe. "
@@ -1185,7 +1253,7 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "agent": {"type": "string", "enum": ["emily", "john", "roger"], "description": "Agent vers qui rediriger (emily=Support, john=Sales, roger=Direction générale)"},
+                    "agent": {"type": "string", "enum": ["emily"], "description": "Agent vers qui rediriger"},
                     "client_request": {"type": "string", "description": "Ce que le client veut exactement"},
                     "context_summary": {"type": "string", "description": "Résumé du contexte Marketing utile pour Emily"},
                     "action_required": {"type": "string", "description": "Ce qu'Emily doit faire en premier"}
@@ -1983,6 +2051,56 @@ async def execute_tool(name: str, args: dict) -> dict:
             else:
                 result = {"error": "Module LinkedIn non disponible"}
 
+        elif name == "trigger_content_scrape":
+            if linkedin_api:
+                result = await linkedin_api.trigger_content_scrape(
+                    sector=clean["sector"], number_of_posts=clean["number_of_posts"],
+                    language=clean["language"], client_preferences=clean.get("client_preferences"))
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
+        elif name == "generate_posts_from_ideas":
+            if linkedin_api:
+                result = await linkedin_api.generate_posts_from_ideas(idea_ids=clean["idea_ids"])
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
+        elif name == "generate_manual_post":
+            if linkedin_api:
+                result = await linkedin_api.generate_manual_post(
+                    titre=clean["titre"], description=clean["description"], language=clean["language"],
+                    hook_ouverture=clean.get("hook_ouverture"), structure_suggeree=clean.get("structure_suggeree"),
+                    cta=clean.get("cta"), hashtags=clean.get("hashtags"))
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
+        elif name == "edit_linkedin_post":
+            if linkedin_api:
+                result = await linkedin_api.edit_linkedin_post(
+                    post_id=clean["post_id"], personalized_post=clean.get("personalized_post"),
+                    generated_image_url=clean.get("generated_image_url"))
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
+        elif name == "regenerate_linkedin_post":
+            if linkedin_api:
+                result = await linkedin_api.regenerate_linkedin_post(
+                    post_id=clean["post_id"], feedback=clean["feedback"], previous_post=clean["previous_post"])
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
+        elif name == "publish_linkedin_post":
+            if linkedin_api:
+                result = await linkedin_api.publish_linkedin_post(post_id=clean["post_id"])
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
+        elif name == "schedule_linkedin_post":
+            if linkedin_api:
+                result = await linkedin_api.schedule_linkedin_post(
+                    post_id=clean["post_id"], scheduled_at=clean["scheduled_at"])
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
+        elif name == "cancel_scheduled_post":
+            if linkedin_api:
+                result = await linkedin_api.cancel_scheduled_post(post_id=clean["post_id"])
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
+
         elif name == "handoff_to_agent":
             agent           = clean.get("agent", "emily")
             client_request  = clean.get("client_request", "")
@@ -2000,9 +2118,6 @@ async def execute_tool(name: str, args: dict) -> dict:
                 "",
                 "Action immediate :",
                 action_required,
-                "",
-                "INSTRUCTION : commence ta reponse par : David vient de m informer de votre demande."
-                " Je prends la suite directement. puis agis immediatement.",
             ]
             result = {
                 "success": True,
@@ -2250,7 +2365,7 @@ async def chat(req: ChatRequest):
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
-                        "content": json.dumps(sanitize_result(result), ensure_ascii=False)
+                        "content": json.dumps(result, ensure_ascii=False)
                     })
 
                 # La boucle continue : le modèle peut décider d'appeler un nouvel outil
