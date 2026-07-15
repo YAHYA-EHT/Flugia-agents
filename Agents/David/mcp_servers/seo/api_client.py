@@ -68,24 +68,15 @@ async def _get(path: str, params: dict = None) -> dict:
     GET avec auto-refresh sur 401.
     """
     async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{BASE_URL}{path}",
-            headers=_get_headers(),
-            params=params,
-            timeout=30
-        )
+        r = await client.get(f"{BASE_URL}{path}", headers=_get_headers(), params=params, timeout=30)
         if r.status_code == 401:
             print(f"[AUTH] Token expiré sur GET {path} — tentative de renouvellement...")
             refreshed = await _refresh_token()
-            if refreshed:
-                r = await client.get(
-                    f"{BASE_URL}{path}",
-                    headers=_get_headers(),
-                    params=params,
-                    timeout=30
-                )
-            else:
-                return {"success": False, "error": "Token expiré et renouvellement impossible — vérifie FLUGIA_EMAIL et FLUGIA_PASSWORD dans .env"}
+            if not refreshed:
+                return {"success": False, "error": "Token expiré et renouvellement impossible"}
+    # Nouveau client avec le token frais
+    async with httpx.AsyncClient() as client2:
+        r = await client2.get(f"{BASE_URL}{path}", headers=_get_headers(), params=params, timeout=30)
         r.raise_for_status()
         return r.json()
 
