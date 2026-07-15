@@ -244,6 +244,10 @@ TOOLS_PROSPECTING = [
     {"type":"function","function":{"name":"get_leads","description":"Leads enrichis avec filtres","parameters":{"type":"object","properties":{"search":{"type":"string"},"industry":{"type":"string"},"min_score":{"type":"number"},"per_page":{"type":"integer","default":20}}}}},
     {"type":"function","function":{"name":"get_prospecting_status","description":"Statut feature Prospecting","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"trigger_lead_enrichment","description":"Lance l'enrichissement de leads. OBLIGATOIRE : confirmer avec le client avant d'appeler.","parameters":{"type":"object","properties":{"person_ids":{"type":"array","items":{"type":"string"}}},"required":["person_ids"]}}},
+    {"type":"function","function":{"name":"search_prospects","description":"Recherche de nouveaux prospects via Apollo (industrie, poste, localisation, taille d'entreprise, mots-clés). Utiliser pour trouver des leads qui n'existent pas encore dans la base.","parameters":{"type":"object","properties":{"organization_industries":{"type":"array","items":{"type":"string"}},"person_titles":{"type":"array","items":{"type":"string"}},"person_locations":{"type":"array","items":{"type":"string"}},"organization_locations":{"type":"array","items":{"type":"string"}},"organization_num_employees_ranges":{"type":"array","items":{"type":"string"}},"q_keywords":{"type":"string"},"per_page":{"type":"integer","default":10}}}}},
+    {"type":"function","function":{"name":"create_lead_list","description":"Crée une nouvelle liste de leads vide, à remplir ensuite avec add_leads_to_list.","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}},
+    {"type":"function","function":{"name":"add_leads_to_list","description":"Ajoute des leads (par person_id) à une liste existante.","parameters":{"type":"object","properties":{"list_id":{"type":"integer"},"person_ids":{"type":"array","items":{"type":"string"}}},"required":["list_id","person_ids"]}}},
+    {"type":"function","function":{"name":"import_leads","description":"Importe manuellement une liste de leads (nom, prénom, email, entreprise, poste, etc.). OBLIGATOIRE : confirmer le nombre et la source avec le client avant d'appeler.","parameters":{"type":"object","properties":{"leads":{"type":"array","items":{"type":"object","properties":{"first_name":{"type":"string"},"last_name":{"type":"string"},"email":{"type":"string"},"company_name":{"type":"string"},"title":{"type":"string"}}}}},"required":["leads"]}}},
     {"type":"function","function":{"name":"generate_leads_report","description":"Génère un PDF rapport leads — SANS interruption si demandé.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"send_email","description":"Envoie email avec PDFs. Confirmer adresse avant. Plusieurs PDFs → file_names=[...].","parameters":{"type":"object","properties":{"to_email":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"file_name":{"type":"string","default":""},"file_names":{"type":"array","items":{"type":"string"},"default":[]}},"required":["to_email","subject","body"]}}},
     {"type":"function","function":{"name":"generate_conversation_pdf","description":"Génère un PDF de n'importe quel contenu — synthèse, analyse, plan d'action commercial. Ne jamais refuser.","parameters":{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"}},"required":["title","content"]}}},
@@ -255,6 +259,11 @@ TOOLS_CAMPAIGNS = [
     {"type":"function","function":{"name":"get_campaign","description":"Détail campagne","parameters":{"type":"object","properties":{"campaign_id":{"type":"integer"}},"required":["campaign_id"]}}},
     {"type":"function","function":{"name":"get_campaign_statistics","description":"Stats globales campagnes","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"update_campaign_status","description":"Active/pause campagne. Activer = envoi réel d'emails. OBLIGATOIRE : confirmer avant.","parameters":{"type":"object","properties":{"campaign_id":{"type":"integer"},"status":{"type":"string","enum":["active","paused"]}},"required":["campaign_id","status"]}}},
+    {"type":"function","function":{"name":"create_campaign","description":"Crée une nouvelle campagne d'outreach (créée en brouillon/draft, pas active). Nécessite un objectif, une offre et un call-to-action clairs — demander au client si manquants.","parameters":{"type":"object","properties":{"name":{"type":"string"},"mode":{"type":"string","enum":["review","auto"]},"objective":{"type":"string"},"offer":{"type":"string"},"cta":{"type":"string"},"tone":{"type":"string"},"language":{"type":"string"}},"required":["name","mode","objective","offer","cta"]}}},
+    {"type":"function","function":{"name":"add_contacts_to_campaign","description":"Ajoute des leads existants comme contacts dans une campagne.","parameters":{"type":"object","properties":{"campaign_id":{"type":"integer"},"person_ids":{"type":"array","items":{"type":"string"}}},"required":["campaign_id","person_ids"]}}},
+    {"type":"function","function":{"name":"check_campaign_replies","description":"Vérifie les réponses reçues des contacts d'une campagne (scan Gmail).","parameters":{"type":"object","properties":{"campaign_id":{"type":"integer"}},"required":["campaign_id"]}}},
+    {"type":"function","function":{"name":"get_contact_conversation","description":"Récupère l'historique de conversation email avec un contact précis d'une campagne.","parameters":{"type":"object","properties":{"campaign_id":{"type":"integer"},"contact_id":{"type":"integer"}},"required":["campaign_id","contact_id"]}}},
+    {"type":"function","function":{"name":"reply_to_contact","description":"Envoie une réponse à un contact dans le fil de conversation existant. OBLIGATOIRE : montrer le texte au client et obtenir sa confirmation avant d'appeler — ceci envoie un vrai email au prospect.","parameters":{"type":"object","properties":{"campaign_id":{"type":"integer"},"contact_id":{"type":"integer"},"body":{"type":"string"}},"required":["campaign_id","contact_id","body"]}}},
     {"type":"function","function":{"name":"generate_campaigns_report","description":"Génère PDF rapport campagnes — SANS interruption.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"send_email","description":"Envoie email avec PDFs. Confirmer adresse avant.","parameters":{"type":"object","properties":{"to_email":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"file_name":{"type":"string","default":""},"file_names":{"type":"array","items":{"type":"string"},"default":[]}},"required":["to_email","subject","body"]}}},
     {"type":"function","function":{"name":"generate_conversation_pdf","description":"Génère un PDF de n'importe quel contenu. Ne jamais refuser.","parameters":{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"}},"required":["title","content"]}}},
@@ -280,6 +289,15 @@ async def execute_tool(name: str, args: dict) -> dict:
             return sanitize_for_json(await api.get_prospecting_status())
         elif name == "trigger_lead_enrichment":
             return sanitize_for_json(await api.trigger_lead_enrichment(person_ids=clean["person_ids"]))
+        elif name == "search_prospects":
+            return sanitize_for_json(await api.search_prospects(**clean))
+        elif name == "create_lead_list":
+            return sanitize_for_json(await api.create_lead_list(name=clean["name"]))
+        elif name == "add_leads_to_list":
+            return sanitize_for_json(await api.add_leads_to_list(
+                list_id=clean["list_id"], person_ids=clean["person_ids"]))
+        elif name == "import_leads":
+            return sanitize_for_json(await api.import_leads(leads=clean["leads"]))
         elif name == "get_campaigns":
             return sanitize_for_json(await api.get_campaigns(**clean))
         elif name == "get_campaign":
@@ -289,6 +307,22 @@ async def execute_tool(name: str, args: dict) -> dict:
         elif name == "update_campaign_status":
             return sanitize_for_json(await api.update_campaign_status(
                 campaign_id=clean["campaign_id"], status=clean["status"]))
+        elif name == "create_campaign":
+            return sanitize_for_json(await api.create_campaign(
+                name=clean["name"], mode=clean["mode"], objective=clean["objective"],
+                offer=clean["offer"], cta=clean["cta"],
+                tone=clean.get("tone"), language=clean.get("language")))
+        elif name == "add_contacts_to_campaign":
+            return sanitize_for_json(await api.add_contacts_to_campaign(
+                campaign_id=clean["campaign_id"], person_ids=clean["person_ids"]))
+        elif name == "check_campaign_replies":
+            return sanitize_for_json(await api.check_campaign_replies(campaign_id=clean["campaign_id"]))
+        elif name == "get_contact_conversation":
+            return sanitize_for_json(await api.get_contact_conversation(
+                campaign_id=clean["campaign_id"], contact_id=clean["contact_id"]))
+        elif name == "reply_to_contact":
+            return sanitize_for_json(await api.reply_to_contact(
+                campaign_id=clean["campaign_id"], contact_id=clean["contact_id"], body=clean["body"]))
 
         elif name == "generate_leads_report":
             if not REPORTLAB_OK:
