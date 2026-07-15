@@ -2,7 +2,7 @@
 John Server — AI Sales Manager @ Flugia
 Port: 8003
 """
-import os, json, re, asyncio, pathlib, smtplib, uuid
+import os, json, re, asyncio, pathlib, smtplib, uuid, hmac, hashlib, secrets, time
 from typing import AsyncGenerator, Optional
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
@@ -10,10 +10,9 @@ from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
@@ -57,7 +56,43 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 REPORTS_DIR = pathlib.Path(__file__).parent / "reports"
 REPORTS_DIR.mkdir(exist_ok=True)
-app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")
+
+# ── Liens de rapports signés — remplace le montage StaticFiles non protégé ──
+# Avant : /reports/{filename} servait n'importe quel PDF à quiconque connaît le nom.
+# Maintenant : chaque lien porte une expiration + une signature HMAC ; sans les
+# deux, ou une fois expiré, le fichier n'est pas servi.
+REPORT_SIGNING_SECRET = os.getenv("REPORT_SIGNING_SECRET", "")
+if not REPORT_SIGNING_SECRET:
+    REPORT_SIGNING_SECRET = secrets.token_hex(32)
+    print("[John] ATTENTION : REPORT_SIGNING_SECRET absent du .env — secret généré aléatoirement pour ce process. "
+          "Les liens de rapports deviendront invalides au prochain redémarrage. "
+          "Ajoute REPORT_SIGNING_SECRET=<valeur fixe> dans Agents/John/.env pour éviter ça.")
+
+REPORT_LINK_TTL_SECONDS = 3600  # liens valides 1h
+
+def _sign_report_path(file_name: str) -> str:
+    """Construit une URL de téléchargement signée et à expiration pour un rapport."""
+    expiry = int(time.time()) + REPORT_LINK_TTL_SECONDS
+    payload = f"{file_name}:{expiry}"
+    sig = hmac.new(REPORT_SIGNING_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"/reports/{file_name}?exp={expiry}&sig={sig}"
+
+def _verify_report_signature(file_name: str, exp: str, sig: str) -> bool:
+    try:
+        expiry = int(exp)
+    except (TypeError, ValueError):
+        return False
+    if time.time() > expiry:
+        return False
+    payload = f"{file_name}:{expiry}"
+    expected = hmac.new(REPORT_SIGNING_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:32]
+    return hmac.compare_digest(expected, sig)
+
+
+# ── Confirmation à deux temps pour l'activation de campagnes ────
+# La barrière technique réelle vit dans api_client.py (JohnApiClient.update_campaign_status),
+# au plus près de la mutation elle-même — pas ici. execute_tool se contente de
+# transmettre confirm / confirmation_token tels que reçus.
 
 client = AsyncOpenAI(
     base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
@@ -119,55 +154,6 @@ def sanitize_for_json(obj):
     elif isinstance(obj, (str, bool, int, float)) or obj is None: return obj
     return str(obj)
 
-# ── Sanitizer contexte LLM ────────────────────────────────────
-_STRIP_FIELDS = {
-    "recording_url", "audio", "audio_url", "audio_base64",
-    "recording", "media_url", "file_url", "file_content",
-    "base64", "binary", "raw_audio",
-}
-_MAX_STR   = 2000   # chars max par champ texte
-_MAX_LIST  = 15     # items max par liste
-_MAX_TOTAL = 80000  # chars max total avant injection LLM
-
-def _clip(obj, _depth=0):
-    """Tronque récursivement un objet pour ne pas exploser le contexte LLM."""
-    if _depth > 6:
-        return "..."
-    if isinstance(obj, dict):
-        return {
-            k: _clip(v, _depth+1)
-            for k, v in obj.items()
-            if k not in _STRIP_FIELDS
-        }
-    if isinstance(obj, list):
-        clipped = [_clip(i, _depth+1) for i in obj[:_MAX_LIST]]
-        if len(obj) > _MAX_LIST:
-            clipped.append(f"... ({len(obj) - _MAX_LIST} éléments supplémentaires non affichés)")
-        return clipped
-    if isinstance(obj, str) and len(obj) > _MAX_STR:
-        return obj[:_MAX_STR] + f"... [tronqué — {len(obj)} chars total]"
-    return obj
-
-def sanitize_result(result: dict) -> dict:
-    """Applique _clip sur le résultat d'un outil avant injection dans le contexte LLM."""
-    clipped = _clip(result)
-    # Vérification finale taille totale
-    import json as _json
-    serialized = _json.dumps(clipped, ensure_ascii=False)
-    if len(serialized) > _MAX_TOTAL:
-        # Tronquer le champ data si trop grand
-        if "data" in clipped:
-            data = clipped["data"]
-            if isinstance(data, list):
-                clipped["data"] = data[:5]
-                clipped["_truncated"] = True
-            elif isinstance(data, dict):
-                clipped["data"] = {k: v for i, (k, v) in enumerate(data.items()) if i < 20}
-                clipped["_truncated"] = True
-    return clipped
-
-
-
 # ── PDF ───────────────────────────────────────────────────────
 def _pdf_styles():
     styles = getSampleStyleSheet()
@@ -194,7 +180,7 @@ def _table_style(navy):
     ])
 
 def generate_leads_report_pdf(lists_data: list, leads_data: list) -> tuple[str, str]:
-    file_id   = str(uuid.uuid4())[:8]
+    file_id   = str(uuid.uuid4())
     file_name = f"rapport_leads_{file_id}.pdf"
     file_path = str(REPORTS_DIR / file_name)
     _, title_s, sub_s, section_s, body_s, amber, navy = _pdf_styles()
@@ -230,7 +216,7 @@ def generate_leads_report_pdf(lists_data: list, leads_data: list) -> tuple[str, 
     return file_name, file_path
 
 def generate_campaigns_report_pdf(campaigns_data: list, stats_data: dict) -> tuple[str, str]:
-    file_id   = str(uuid.uuid4())[:8]
+    file_id   = str(uuid.uuid4())
     file_name = f"rapport_campaigns_{file_id}.pdf"
     file_path = str(REPORTS_DIR / file_name)
     _, title_s, sub_s, section_s, body_s, amber, navy = _pdf_styles()
@@ -282,8 +268,8 @@ def route_model(message: str) -> str:
 
 CONTEXT_PROMPTS = {
     "john":        "",
-    "prospecting": "\n\n[FOCUS PROSPECTING : concentre-toi sur les leads. Appelle get_lead_lists() en priorité.]\n[REDIRECTION SECTION : si la demande concerne Marketing/SEO → David, si Support/appels → Emily. 1 phrase max puis handoff_to_agent immédiatement, pas de brief élaboré.]",
-    "campaigns":   "\n\n[REDIRECTION SECTION : si la demande concerne Marketing → David, si Support → Emily. 1 phrase max puis handoff_to_agent immédiatement.]\n[FOCUS CAMPAIGNS : concentre-toi sur les campagnes. Appelle get_campaigns() en priorité.]",
+    "prospecting": "\n\n[FOCUS PROSPECTING : concentre-toi sur les leads. Appelle get_lead_lists() en priorité.]",
+    "campaigns":   "\n\n[FOCUS CAMPAIGNS : concentre-toi sur les campagnes. Appelle get_campaigns() en priorité.]",
 }
 
 # ── Tools ─────────────────────────────────────────────────────
@@ -307,7 +293,7 @@ TOOLS_CAMPAIGNS = [
     {"type":"function","function":{"name":"get_campaigns","description":"Liste les campagnes","parameters":{"type":"object","properties":{"status":{"type":"string","enum":["draft","active","paused","completed","archived"]}}}}},
     {"type":"function","function":{"name":"get_campaign","description":"Détail campagne","parameters":{"type":"object","properties":{"campaign_id":{"type":"integer"}},"required":["campaign_id"]}}},
     {"type":"function","function":{"name":"get_campaign_statistics","description":"Stats globales campagnes","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"update_campaign_status","description":"Active/pause campagne. Activer = envoi réel d'emails. OBLIGATOIRE : confirmer avant.","parameters":{"type":"object","properties":{"campaign_id":{"type":"integer"},"status":{"type":"string","enum":["active","paused"]}},"required":["campaign_id","status"]}}},
+    {"type":"function","function":{"name":"update_campaign_status","description":"Active/pause une campagne. Activer envoie de vrais emails — mécanisme à deux temps obligatoire : 1) appeler SANS confirm pour obtenir un aperçu + confirmation_token, 2) après accord EXPLICITE du client dans un message séparé, rappeler avec confirm=true et le même confirmation_token. Mettre en pause n'a pas besoin de ce mécanisme (action réversible).","parameters":{"type":"object","properties":{"campaign_id":{"type":"integer"},"status":{"type":"string","enum":["active","paused"]},"confirm":{"type":"boolean","default":False,"description":"true uniquement lors du second appel, après accord explicite du client"},"confirmation_token":{"type":"string","description":"Token reçu lors du premier appel (aperçu) — requis pour confirmer"}},"required":["campaign_id","status"]}}},
     {"type":"function","function":{"name":"create_campaign","description":"Crée une nouvelle campagne d'outreach (créée en brouillon/draft, pas active). Nécessite un objectif, une offre et un call-to-action clairs — demander au client si manquants.","parameters":{"type":"object","properties":{"name":{"type":"string"},"mode":{"type":"string","enum":["review","auto"]},"objective":{"type":"string"},"offer":{"type":"string"},"cta":{"type":"string"},"tone":{"type":"string"},"language":{"type":"string"}},"required":["name","mode","objective","offer","cta"]}}},
     {"type":"function","function":{"name":"add_contacts_to_campaign","description":"Ajoute des leads existants comme contacts dans une campagne.","parameters":{"type":"object","properties":{"campaign_id":{"type":"integer"},"person_ids":{"type":"array","items":{"type":"string"}}},"required":["campaign_id","person_ids"]}}},
     {"type":"function","function":{"name":"check_campaign_replies","description":"Vérifie les réponses reçues des contacts d'une campagne (scan Gmail).","parameters":{"type":"object","properties":{"campaign_id":{"type":"integer"}},"required":["campaign_id"]}}},
@@ -354,8 +340,12 @@ async def execute_tool(name: str, args: dict) -> dict:
         elif name == "get_campaign_statistics":
             return sanitize_for_json(await api.get_campaign_statistics())
         elif name == "update_campaign_status":
+            campaign_id = clean["campaign_id"]
+            status      = clean["status"]
             return sanitize_for_json(await api.update_campaign_status(
-                campaign_id=clean["campaign_id"], status=clean["status"]))
+                campaign_id=campaign_id, status=status,
+                confirm=clean.get("confirm", False),
+                confirmation_token=clean.get("confirmation_token")))
         elif name == "create_campaign":
             return sanitize_for_json(await api.create_campaign(
                 name=clean["name"], mode=clean["mode"], objective=clean["objective"],
@@ -382,7 +372,7 @@ async def execute_tool(name: str, args: dict) -> dict:
             leads_data = leads_res.get("data", []) if leads_res.get("success") else []
             file_name, _ = generate_leads_report_pdf(lists_data, leads_data)
             return {"success": True, "file_name": file_name,
-                    "download_url": f"/reports/{file_name}",
+                    "download_url": _sign_report_path(file_name),
                     "message": f"Rapport leads : {len(lists_data)} liste(s), {len(leads_data)} lead(s)."}
 
         elif name == "generate_campaigns_report":
@@ -394,7 +384,7 @@ async def execute_tool(name: str, args: dict) -> dict:
             stats_data = stats_res.get("data", {}) if stats_res.get("success") else {}
             file_name, _ = generate_campaigns_report_pdf(camps_data, stats_data)
             return {"success": True, "file_name": file_name,
-                    "download_url": f"/reports/{file_name}",
+                    "download_url": _sign_report_path(file_name),
                     "message": f"Rapport campagnes : {len(camps_data)} campagne(s)."}
 
         elif name == "send_email":
@@ -429,7 +419,7 @@ async def execute_tool(name: str, args: dict) -> dict:
                 return {"error": "ReportLab non installé"}
             title_text   = clean.get("title", "Document Sales")
             content_text = clean.get("content", "")
-            file_id      = str(uuid.uuid4())[:8]
+            file_id      = str(uuid.uuid4())
             file_name    = f"document_john_{file_id}.pdf"
             file_path    = str(REPORTS_DIR / file_name)
             _, title_s, sub_s, section_s, body_s, amber, navy = _pdf_styles()
@@ -446,7 +436,7 @@ async def execute_tool(name: str, args: dict) -> dict:
                     story.append(Paragraph(p.replace("•", "–").replace("**", ""), body_s))
                     story.append(Spacer(1, 3))
             doc.build(story)
-            return {"success": True, "download_url": f"/reports/{file_name}",
+            return {"success": True, "download_url": _sign_report_path(file_name),
                     "file_name": file_name, "title": title_text}
 
         elif name == "handoff_to_agent":
@@ -553,7 +543,7 @@ async def chat(req: ChatRequest):
 
                     await asyncio.sleep(0)
                     messages.append({"role": "tool", "tool_call_id": tc.id,
-                                      "content": json.dumps(sanitize_result(sanitize_for_json(result)), ensure_ascii=False)})
+                                      "content": json.dumps(sanitize_for_json(result), ensure_ascii=False)})
             else:
                 final = await client.chat.completions.create(
                     model=MODEL_SONNET, messages=messages, max_tokens=1024, stream=True)
@@ -585,6 +575,19 @@ async def dashboard_sales():
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+@app.get("/reports/{file_name}")
+async def get_report(file_name: str, exp: str = Query(...), sig: str = Query(...)):
+    """Sert un rapport PDF uniquement avec une signature valide et non expirée."""
+    # Empêche toute tentative de traversée de répertoire (../, /, \)
+    if "/" in file_name or "\\" in file_name or ".." in file_name:
+        raise HTTPException(status_code=400, detail="Nom de fichier invalide")
+    if not _verify_report_signature(file_name, exp, sig):
+        raise HTTPException(status_code=403, detail="Lien invalide ou expiré")
+    file_path = REPORTS_DIR / file_name
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Fichier introuvable")
+    return FileResponse(str(file_path), media_type="application/pdf", filename=file_name)
 
 @app.get("/health")
 async def health():

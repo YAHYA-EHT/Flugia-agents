@@ -6,6 +6,8 @@ et tests hors-ligne sans dépendre de l'API réelle.
 """
 import os
 import uuid
+import time
+import secrets
 import httpx
 from datetime import datetime
 from dotenv import load_dotenv
@@ -16,6 +18,39 @@ API_BASE = os.getenv("FLUGIA_API_BASE_URL", "https://api-dev.flugia.com")
 EMAIL    = os.getenv("FLUGIA_EMAIL")
 PASSWORD = os.getenv("FLUGIA_PASSWORD")
 MODE     = os.getenv("APP_MODE", "mock")
+
+# ── Confirmation gate pour l'activation de campagnes ──────────
+# Activer une campagne envoie de vrais emails à de vrais contacts. Un simple
+# texte d'instruction dans le prompt ne suffit pas à empêcher un modèle de
+# l'exécuter en un seul appel — on force donc un vrai aller-retour : un
+# premier appel sans confirm=True renvoie un token de prévisualisation, et
+# seul un second appel avec ce même token exact déclenche l'action réelle.
+_PENDING_ACTIVATIONS: dict = {}
+_ACTIVATION_TOKEN_TTL_SECONDS = 15 * 60  # 15 minutes
+_ACTIVATION_TOKEN_MIN_DELAY_SECONDS = 2   # empêche un enchaînement immédiat des deux appels
+
+
+def _issue_activation_token(campaign_id: int) -> str:
+    token = secrets.token_hex(12)
+    _PENDING_ACTIVATIONS[token] = {"campaign_id": campaign_id, "created_at": time.time()}
+    return token
+
+
+def _consume_activation_token(token: str, campaign_id: int) -> tuple[bool, str]:
+    pending = _PENDING_ACTIVATIONS.get(token)
+    if not pending:
+        return False, "Token de confirmation invalide, expiré, ou déjà utilisé — relance la prévisualisation."
+    if pending["campaign_id"] != campaign_id:
+        return False, "Ce token ne correspond pas à cette campagne — relance la prévisualisation."
+    age = time.time() - pending["created_at"]
+    if age > _ACTIVATION_TOKEN_TTL_SECONDS:
+        del _PENDING_ACTIVATIONS[token]
+        return False, "Le délai de confirmation a expiré — relance la prévisualisation."
+    if age < _ACTIVATION_TOKEN_MIN_DELAY_SECONDS:
+        return False, "Confirmation appelée trop rapidement après l'aperçu — assure-toi que le client a bien donné son accord explicite entre les deux."
+    del _PENDING_ACTIVATIONS[token]
+    return True, ""
+
 
 
 # ── Données mock ────────────────────────────────────────────────
@@ -213,7 +248,37 @@ class JohnApiClient:
             return {"success": True, "data": MOCK_CAMPAIGN_STATS}
         return await self._get("/api/campaigns/statistics")
 
-    async def update_campaign_status(self, campaign_id: int, status: str) -> dict:
+    async def update_campaign_status(self, campaign_id: int, status: str,
+                                      confirm: bool = False, confirmation_token: str = None) -> dict:
+        # Pauser est réversible et sans effet public — pas de confirmation exigée.
+        if status != "active":
+            return await self._set_campaign_status(campaign_id, status)
+
+        # Activer envoie de vrais emails — exige un aller-retour réel via token.
+        if confirm and confirmation_token:
+            ok, err = _consume_activation_token(confirmation_token, campaign_id)
+            if not ok:
+                return {"success": False, "error": err}
+            return await self._set_campaign_status(campaign_id, status)
+
+        # Pas encore confirmé : renvoyer un aperçu + un token, ne rien exécuter.
+        preview = await self.get_campaign(campaign_id)
+        if not preview.get("success"):
+            return {"success": False, "error": "Campagne introuvable — impossible de prévisualiser avant activation."}
+        token = _issue_activation_token(campaign_id)
+        return {
+            "success": False,
+            "needs_confirmation": True,
+            "confirmation_token": token,
+            "campaign": preview.get("data"),
+            "message": (
+                "Activation non exécutée — confirmation requise. Présente les détails de la campagne "
+                "au client, et seulement après un accord explicite, rappelle update_campaign_status "
+                f"avec status='active', confirm=true et confirmation_token='{token}'."
+            ),
+        }
+
+    async def _set_campaign_status(self, campaign_id: int, status: str) -> dict:
         if MODE == "mock":
             camp = next((c for c in MOCK_CAMPAIGNS if c["id"] == campaign_id), None)
             if not camp:
