@@ -79,6 +79,55 @@ def sanitize_for_json(obj):
     else:
         return obj
 
+# ── Sanitizer contexte LLM ────────────────────────────────────
+_STRIP_FIELDS = {
+    "recording_url", "audio", "audio_url", "audio_base64",
+    "recording", "media_url", "file_url", "file_content",
+    "base64", "binary", "raw_audio",
+}
+_MAX_STR   = 2000   # chars max par champ texte
+_MAX_LIST  = 15     # items max par liste
+_MAX_TOTAL = 80000  # chars max total avant injection LLM
+
+def _clip(obj, _depth=0):
+    """Tronque récursivement un objet pour ne pas exploser le contexte LLM."""
+    if _depth > 6:
+        return "..."
+    if isinstance(obj, dict):
+        return {
+            k: _clip(v, _depth+1)
+            for k, v in obj.items()
+            if k not in _STRIP_FIELDS
+        }
+    if isinstance(obj, list):
+        clipped = [_clip(i, _depth+1) for i in obj[:_MAX_LIST]]
+        if len(obj) > _MAX_LIST:
+            clipped.append(f"... ({len(obj) - _MAX_LIST} éléments supplémentaires non affichés)")
+        return clipped
+    if isinstance(obj, str) and len(obj) > _MAX_STR:
+        return obj[:_MAX_STR] + f"... [tronqué — {len(obj)} chars total]"
+    return obj
+
+def sanitize_result(result: dict) -> dict:
+    """Applique _clip sur le résultat d'un outil avant injection dans le contexte LLM."""
+    clipped = _clip(result)
+    # Vérification finale taille totale
+    import json as _json
+    serialized = _json.dumps(clipped, ensure_ascii=False)
+    if len(serialized) > _MAX_TOTAL:
+        # Tronquer le champ data si trop grand
+        if "data" in clipped:
+            data = clipped["data"]
+            if isinstance(data, list):
+                clipped["data"] = data[:5]
+                clipped["_truncated"] = True
+            elif isinstance(data, dict):
+                clipped["data"] = {k: v for i, (k, v) in enumerate(data.items()) if i < 20}
+                clipped["_truncated"] = True
+    return clipped
+
+
+
 # ── Session Manager (SQLite) ─────────────────────────────────
 DB_PATH = pathlib.Path(__file__).parent / "sessions.db"
 _db_lock = threading.Lock()
@@ -461,7 +510,9 @@ OUTILS SEO DISPONIBLES :
 - get_seo_settings() → config du compte (site, secteur, langue, brand)
 - send_email(to, subject, body, file_name?) → envoyer par email
 
-DÉBORDEMENT uniquement vers Sales (John) ou Support (Emily) si la demande sort du Marketing.
+REDIRECTION (section — réponse courte) :
+Si la demande concerne le Support ou les appels clients → Emily. Si Sales/leads/prospection → John.
+1 phrase max : "Pour ça c'est Emily chez nous." puis handoff_to_agent immédiatement. Pas de brief élaboré.
 """
 
 EREP_CONTEXT = """
@@ -474,7 +525,9 @@ OUTILS E-REPUTATION DISPONIBLES :
 - mark_notification_read, n8n_generate_review_response, n8n_analyze_reviews
 - n8n_collect_reviews, submit_reply, send_email
 
-DÉBORDEMENT uniquement vers Sales (John) ou Support (Emily) si la demande sort du Marketing.
+REDIRECTION (section — réponse courte) :
+Si la demande concerne le Support ou les appels clients → Emily. Si Sales/leads/prospection → John.
+1 phrase max : "Pour ça c'est John chez nous." puis handoff_to_agent immédiatement. Pas de brief élaboré.
 """
 
 LINKEDIN_CONTEXT = """
@@ -487,7 +540,9 @@ OUTILS LINKEDIN DISPONIBLES :
 
 Génération, publication et planification de posts ne sont PAS encore câblées — voir règles de comportement.
 
-DÉBORDEMENT uniquement vers Sales (John) ou Support (Emily) si la demande sort du Marketing.
+REDIRECTION (section — réponse courte) :
+Si la demande concerne le Support ou les appels clients → Emily. Si Sales/leads/prospection → John.
+1 phrase max : "Pour ça c'est Emily chez nous." puis handoff_to_agent immédiatement. Pas de brief élaboré.
 """
 
 CONTEXT_PROMPTS = {
@@ -502,9 +557,9 @@ TOOLS_BY_CONTEXT = {
     "david": None,  # None = tous les outils
     # Tous les contextes Marketing ont accès à tous les outils Marketing
     # La distinction contextuelle sert uniquement au prompt — pas aux outils
-    "e_reputation": ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "get_linkedin_settings", "get_style_guide", "get_linkedin_posts", "get_linkedin_post", "get_content_ideas", "get_content_idea_session", "get_kpi_analyses", "get_kpi_analysis", "send_email"],
-    "seo":          ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "get_linkedin_settings", "get_style_guide", "get_linkedin_posts", "get_linkedin_post", "get_content_ideas", "get_content_idea_session", "get_kpi_analyses", "get_kpi_analysis", "send_email"],
-    "linkedin":     ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "get_linkedin_settings", "get_style_guide", "get_linkedin_posts", "get_linkedin_post", "get_content_ideas", "get_content_idea_session", "get_kpi_analyses", "get_kpi_analysis", "send_email"],
+"e_reputation": ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "get_linkedin_settings", "get_style_guide", "get_linkedin_posts", "get_linkedin_post", "get_content_ideas", "get_content_idea_session", "get_kpi_analyses", "get_kpi_analysis", "send_email", "handoff_to_agent"],
+    "seo":          ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "get_linkedin_settings", "get_style_guide", "get_linkedin_posts", "get_linkedin_post", "get_content_ideas", "get_content_idea_session", "get_kpi_analyses", "get_kpi_analysis", "send_email", "handoff_to_agent"],
+    "linkedin":     ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "get_linkedin_settings", "get_style_guide", "get_linkedin_posts", "get_linkedin_post", "get_content_ideas", "get_content_idea_session", "get_kpi_analyses", "get_kpi_analysis", "send_email", "handoff_to_agent"],
 }
 
 def get_tools_for_context(context: str) -> list:
@@ -1130,7 +1185,7 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "agent": {"type": "string", "enum": ["emily"], "description": "Agent vers qui rediriger"},
+                    "agent": {"type": "string", "enum": ["emily", "john", "roger"], "description": "Agent vers qui rediriger (emily=Support, john=Sales, roger=Direction générale)"},
                     "client_request": {"type": "string", "description": "Ce que le client veut exactement"},
                     "context_summary": {"type": "string", "description": "Résumé du contexte Marketing utile pour Emily"},
                     "action_required": {"type": "string", "description": "Ce qu'Emily doit faire en premier"}
@@ -1945,6 +2000,9 @@ async def execute_tool(name: str, args: dict) -> dict:
                 "",
                 "Action immediate :",
                 action_required,
+                "",
+                "INSTRUCTION : commence ta reponse par : David vient de m informer de votre demande."
+                " Je prends la suite directement. puis agis immediatement.",
             ]
             result = {
                 "success": True,
@@ -2192,7 +2250,7 @@ async def chat(req: ChatRequest):
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
-                        "content": json.dumps(result, ensure_ascii=False)
+                        "content": json.dumps(sanitize_result(result), ensure_ascii=False)
                     })
 
                 # La boucle continue : le modèle peut décider d'appeler un nouvel outil

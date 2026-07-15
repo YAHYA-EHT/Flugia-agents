@@ -128,6 +128,55 @@ def sanitize_for_json(obj):
     elif isinstance(obj, (str, bool, int, float)) or obj is None: return obj
     return str(obj)
 
+# ── Sanitizer contexte LLM ────────────────────────────────────
+_STRIP_FIELDS = {
+    "recording_url", "audio", "audio_url", "audio_base64",
+    "recording", "media_url", "file_url", "file_content",
+    "base64", "binary", "raw_audio",
+}
+_MAX_STR   = 2000   # chars max par champ texte
+_MAX_LIST  = 15     # items max par liste
+_MAX_TOTAL = 80000  # chars max total avant injection LLM
+
+def _clip(obj, _depth=0):
+    """Tronque récursivement un objet pour ne pas exploser le contexte LLM."""
+    if _depth > 6:
+        return "..."
+    if isinstance(obj, dict):
+        return {
+            k: _clip(v, _depth+1)
+            for k, v in obj.items()
+            if k not in _STRIP_FIELDS
+        }
+    if isinstance(obj, list):
+        clipped = [_clip(i, _depth+1) for i in obj[:_MAX_LIST]]
+        if len(obj) > _MAX_LIST:
+            clipped.append(f"... ({len(obj) - _MAX_LIST} éléments supplémentaires non affichés)")
+        return clipped
+    if isinstance(obj, str) and len(obj) > _MAX_STR:
+        return obj[:_MAX_STR] + f"... [tronqué — {len(obj)} chars total]"
+    return obj
+
+def sanitize_result(result: dict) -> dict:
+    """Applique _clip sur le résultat d'un outil avant injection dans le contexte LLM."""
+    clipped = _clip(result)
+    # Vérification finale taille totale
+    import json as _json
+    serialized = _json.dumps(clipped, ensure_ascii=False)
+    if len(serialized) > _MAX_TOTAL:
+        # Tronquer le champ data si trop grand
+        if "data" in clipped:
+            data = clipped["data"]
+            if isinstance(data, list):
+                clipped["data"] = data[:5]
+                clipped["_truncated"] = True
+            elif isinstance(data, dict):
+                clipped["data"] = {k: v for i, (k, v) in enumerate(data.items()) if i < 20}
+                clipped["_truncated"] = True
+    return clipped
+
+
+
 # ── PDF helpers ───────────────────────────────────────────────
 def _pdf_styles():
     styles = getSampleStyleSheet()
@@ -264,8 +313,8 @@ def route_model(message: str) -> str:
 # ── Contextes ─────────────────────────────────────────────────
 CONTEXT_PROMPTS = {
     "emily":      "",
-    "chatbot":    "\n\n[FOCUS CHATBOT : concentre-toi sur les chatbots. Appelle get_chatbots() en priorité si l'historique est vide.]",
-    "agent_call": "\n\n[FOCUS AGENT CALL : concentre-toi sur les agents vocaux et appels. Appelle get_call_dashboard() en priorité si l'historique est vide.]",
+    "chatbot":    "\n\n[FOCUS CHATBOT : concentre-toi sur les chatbots. Appelle get_chatbots() en priorité si l'historique est vide.]\n[REDIRECTION SECTION : si la demande concerne Marketing/SEO/réputation → David, si Sales/leads → John. 1 phrase max puis handoff_to_agent immédiatement, pas de brief élaboré.]",
+    "agent_call": "\n\n[REDIRECTION SECTION : si la demande concerne Marketing → David, si Sales/leads → John. 1 phrase max puis handoff_to_agent immédiatement.]\n[FOCUS AGENT CALL : concentre-toi sur les agents vocaux et appels. Appelle get_call_dashboard() en priorité si l'historique est vide.]",
 }
 
 # ── Tools ─────────────────────────────────────────────────────
@@ -284,7 +333,8 @@ TOOLS_CHATBOT = [
     {"type":"function","function":{"name":"generate_conversation_pdf","description":"Génère un PDF de n'importe quel contenu — conversation, résumé, analyse, liste. Ne jamais refuser une demande de PDF. Générer SANS interruption.","parameters":{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"}},"required":["title","content"]}}},
     {"type":"function","function":{"name":"generate_support_report","description":"Génère un rapport PDF complet Support combinant Chatbots ET Agent Call. Générer SANS interruption dès que demandé.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"send_email","description":"Envoie un email avec signature Emily. Supporte plusieurs pièces jointes via file_names.","parameters":{"type":"object","properties":{"to_email":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"file_name":{"type":"string","default":""},"file_names":{"type":"array","items":{"type":"string"},"description":"Plusieurs PDFs en un email","default":[]}},"required":["to_email","subject","body"]}}},
-    {"type":"function","function":{"name":"handoff_to_agent","description":"Redirige le client vers David (Marketing) avec un brief complet. Utiliser quand le client demande quelque chose de Marketing (SEO, réputation, LinkedIn, article). Consulter les données disponibles puis appeler cet outil avec un brief riche.","parameters":{"type":"object","properties":{"agent":{"type":"string","enum":["david"],"description":"Agent vers qui rediriger"},"client_request":{"type":"string","description":"Ce que le client veut exactement"},"context_summary":{"type":"string","description":"Résumé du contexte Support utile pour David"},"action_required":{"type":"string","description":"Ce que David doit faire en premier"}},"required":["agent","client_request","action_required"]}}},
+    {"type":"function","function":{"name":"update_agent","description":"Modifie la configuration d'un agent vocal. Champs : agent_name, language, greeting_message, specific_instructions, duration_limit, timezone. CONFIRMER avec le client avant d'appeler.","parameters":{"type":"object","properties":{"agent_id":{"type":"integer","description":"ID de l'agent (appeler get_agents pour trouver l'ID exact)"},"data":{"type":"object","description":"Champs à modifier ex: {\"agent_name\": \"Salma\", \"language\": \"fr\"}"}},"required":["agent_id","data"]}}},
+    {"type":"function","function":{"name":"handoff_to_agent","description":"Redirige le client vers David (Marketing) avec un brief complet. Utiliser quand le client demande quelque chose de Marketing (SEO, réputation, LinkedIn, article). Consulter les données disponibles puis appeler cet outil avec un brief riche.","parameters":{"type":"object","properties":{"agent":{"type":"string","enum":["david","john","roger"],"description":"Agent vers qui rediriger (david=Marketing, john=Sales, roger=Direction)"},"client_request":{"type":"string","description":"Ce que le client veut exactement"},"context_summary":{"type":"string","description":"Résumé du contexte Support utile pour David"},"action_required":{"type":"string","description":"Ce que David doit faire en premier"}},"required":["agent","client_request","action_required"]}}},
 ]
 
 TOOLS_AGENT_CALL = [
@@ -314,13 +364,23 @@ TOOLS_AGENT_CALL = [
     {"type":"function","function":{"name":"generate_call_report","description":"Génère un rapport PDF téléchargeable des appels (dashboard + ratings + appels récents)","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"generate_support_report","description":"Génère un rapport PDF complet Support combinant Chatbots ET Agent Call. Générer SANS interruption dès que demandé.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"send_email","description":"Envoie un email avec signature Emily. Supporte plusieurs pièces jointes via file_names.","parameters":{"type":"object","properties":{"to_email":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"},"file_name":{"type":"string","default":""},"file_names":{"type":"array","items":{"type":"string"},"description":"Plusieurs PDFs en un email","default":[]}},"required":["to_email","subject","body"]}}},
-    {"type":"function","function":{"name":"handoff_to_agent","description":"Redirige le client vers David (Marketing) avec un brief complet. Utiliser quand le client demande quelque chose de Marketing (SEO, réputation, LinkedIn, article). Consulter les données disponibles puis appeler cet outil avec un brief riche.","parameters":{"type":"object","properties":{"agent":{"type":"string","enum":["david"],"description":"Agent vers qui rediriger"},"client_request":{"type":"string","description":"Ce que le client veut exactement"},"context_summary":{"type":"string","description":"Résumé du contexte Support utile pour David"},"action_required":{"type":"string","description":"Ce que David doit faire en premier"}},"required":["agent","client_request","action_required"]}}},
+    {"type":"function","function":{"name":"update_agent","description":"Modifie la configuration d'un agent vocal. Champs : agent_name, language, greeting_message, specific_instructions, duration_limit, timezone. CONFIRMER avec le client avant d'appeler.","parameters":{"type":"object","properties":{"agent_id":{"type":"integer","description":"ID de l'agent (appeler get_agents pour trouver l'ID exact)"},"data":{"type":"object","description":"Champs à modifier ex: {\"agent_name\": \"Salma\", \"language\": \"fr\"}"}},"required":["agent_id","data"]}}},
+    {"type":"function","function":{"name":"handoff_to_agent","description":"Redirige le client vers David (Marketing) avec un brief complet. Utiliser quand le client demande quelque chose de Marketing (SEO, réputation, LinkedIn, article). Consulter les données disponibles puis appeler cet outil avec un brief riche.","parameters":{"type":"object","properties":{"agent":{"type":"string","enum":["david","john","roger"],"description":"Agent vers qui rediriger (david=Marketing, john=Sales, roger=Direction)"},"client_request":{"type":"string","description":"Ce que le client veut exactement"},"context_summary":{"type":"string","description":"Résumé du contexte Support utile pour David"},"action_required":{"type":"string","description":"Ce que David doit faire en premier"}},"required":["agent","client_request","action_required"]}}},
 ]
 
 TOOLS_ALL = TOOLS_CHATBOT + [t for t in TOOLS_AGENT_CALL if t["function"]["name"] not in {t2["function"]["name"] for t2 in TOOLS_CHATBOT}]
 TOOLS_BY_CONTEXT = {"emily": TOOLS_ALL, "chatbot": TOOLS_CHATBOT, "agent_call": TOOLS_AGENT_CALL}
 
 # ── execute_tool ──────────────────────────────────────────────
+def _sanitize_call(c: dict) -> dict:
+    """Supprime les champs audio/binaires volumineux + tronque les transcriptions."""
+    STRIP = {"recording_url", "audio", "audio_url", "audio_base64", "recording", "media_url"}
+    out = {k: v for k, v in c.items() if k not in STRIP}
+    if "transcript" in out and isinstance(out["transcript"], str) and len(out["transcript"]) > 1500:
+        out["transcript"] = out["transcript"][:1500] + "... [tronqué]"
+    return out
+
+
 async def execute_tool(name: str, args: dict) -> dict:
     try:
         clean = {k: v for k, v in args.items() if v is not None}
@@ -471,15 +531,24 @@ async def execute_tool(name: str, args: dict) -> dict:
                         result["alert"] = f"CRITIQUE : satisfaction à {avg}/5"
                     elif avg < 4:
                         result["alert"] = f"ALERTE : satisfaction à {avg}/5"
+
         elif name == "get_call_dashboard_calls":
             result = await api.get_call_dashboard_calls()
             if result.get("success") and result.get("data"):
-                calls   = result["data"]
-                missed  = [c for c in calls if c.get("status") in ("missed", "no-answer")]
-                failed  = [c for c in calls if c.get("status") == "failed"]
+                raw = result["data"]
+                if isinstance(raw, dict):
+                    calls = raw.get("calls", {}).get("data", []) or raw.get("data", []) or []
+                elif isinstance(raw, list):
+                    calls = raw
+                else:
+                    calls = []
+                calls = [_sanitize_call(c) for c in calls if isinstance(c, dict)]
+                result["data"] = calls[:10]
+                missed = [c for c in calls if c.get("status") in ("missed", "no-answer")]
+                failed = [c for c in calls if c.get("status") == "failed"]
                 if missed:
                     result["missed_count"] = len(missed)
-                    result["missed_calls"] = missed[:5]
+                    result["missed_calls"]  = missed[:5]
                 if failed:
                     result["failed_count"] = len(failed)
         elif name == "get_call_dashboard_call":
@@ -699,6 +768,14 @@ async def execute_tool(name: str, args: dict) -> dict:
                     result = {"success": success, "to_email": to_email,
                               "message": f"Email envoyé à {to_email}" if success else "Erreur SMTP"}
 
+        elif name == "update_agent":
+            agent_id = clean.get("agent_id")
+            data     = clean.get("data", {})
+            if not agent_id:
+                result = {"error": "agent_id manquant"}
+            else:
+                result = await api.update_agent(id=agent_id, data=data)
+
         elif name == "handoff_to_agent":
             agent           = clean.get("agent", "david")
             client_request  = clean.get("client_request", "")
@@ -716,6 +793,9 @@ async def execute_tool(name: str, args: dict) -> dict:
                 "",
                 "Action immediate :",
                 action_required,
+                "",
+                "INSTRUCTION : commence ta reponse par : Emily vient de m informer de votre demande."
+                " Je prends la suite directement. puis agis immediatement.",
             ]
             result = {
                 "success": True,
@@ -809,7 +889,7 @@ async def chat(req: ChatRequest):
                     await asyncio.sleep(0)
 
                     messages.append({"role": "tool", "tool_call_id": tc.id,
-                                      "content": json.dumps(sanitize_for_json(result), ensure_ascii=False)})
+                                      "content": json.dumps(sanitize_result(sanitize_for_json(result)), ensure_ascii=False)})
             else:
                 final = await client.chat.completions.create(
                     model=MODEL_SONNET, messages=messages, max_tokens=1024, stream=True)

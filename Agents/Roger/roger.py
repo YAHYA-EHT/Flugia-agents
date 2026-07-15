@@ -181,7 +181,7 @@ async def call_agent(agent: str, message: str, history: list) -> str:
         "message": message,
         "context": context,
         "history": history[-6:] if len(history) > 6 else history,
-        "user_id": "roger_orchestrator",
+        "user_id": "flugia_user",
     }
 
     last_error = ""
@@ -270,6 +270,55 @@ def sanitize_for_json(obj):
     elif isinstance(obj, list): return [sanitize_for_json(i) for i in obj]
     elif isinstance(obj, (str, bool, int, float)) or obj is None: return obj
     return str(obj)
+
+# ── Sanitizer contexte LLM ────────────────────────────────────
+_STRIP_FIELDS = {
+    "recording_url", "audio", "audio_url", "audio_base64",
+    "recording", "media_url", "file_url", "file_content",
+    "base64", "binary", "raw_audio",
+}
+_MAX_STR   = 2000   # chars max par champ texte
+_MAX_LIST  = 15     # items max par liste
+_MAX_TOTAL = 80000  # chars max total avant injection LLM
+
+def _clip(obj, _depth=0):
+    """Tronque récursivement un objet pour ne pas exploser le contexte LLM."""
+    if _depth > 6:
+        return "..."
+    if isinstance(obj, dict):
+        return {
+            k: _clip(v, _depth+1)
+            for k, v in obj.items()
+            if k not in _STRIP_FIELDS
+        }
+    if isinstance(obj, list):
+        clipped = [_clip(i, _depth+1) for i in obj[:_MAX_LIST]]
+        if len(obj) > _MAX_LIST:
+            clipped.append(f"... ({len(obj) - _MAX_LIST} éléments supplémentaires non affichés)")
+        return clipped
+    if isinstance(obj, str) and len(obj) > _MAX_STR:
+        return obj[:_MAX_STR] + f"... [tronqué — {len(obj)} chars total]"
+    return obj
+
+def sanitize_result(result: dict) -> dict:
+    """Applique _clip sur le résultat d'un outil avant injection dans le contexte LLM."""
+    clipped = _clip(result)
+    # Vérification finale taille totale
+    import json as _json
+    serialized = _json.dumps(clipped, ensure_ascii=False)
+    if len(serialized) > _MAX_TOTAL:
+        # Tronquer le champ data si trop grand
+        if "data" in clipped:
+            data = clipped["data"]
+            if isinstance(data, list):
+                clipped["data"] = data[:5]
+                clipped["_truncated"] = True
+            elif isinstance(data, dict):
+                clipped["data"] = {k: v for i, (k, v) in enumerate(data.items()) if i < 20}
+                clipped["_truncated"] = True
+    return clipped
+
+
 
 def send_email_fn(to_email: str, subject: str, body: str, file_names: list = None) -> bool:
     try:
@@ -379,14 +428,33 @@ async def execute_tool(name: str, args: dict, history: list) -> dict:
         elif name == "generate_global_report":
             if not REPORTLAB_OK:
                 return {"error": "ReportLab non installé — pip install reportlab"}
-            q = "Résumé complet : KPIs, alertes, points d'attention, état général"
+            q = (
+                "Fais un résumé structuré en texte simple (pas de markdown, pas de ##, pas de **) : "
+                "KPIs principaux, alertes actives, points d'attention, état général. "
+                "Maximum 300 mots. Format : phrases courtes, tirets simples."
+            )
             agents_avail = [a for a in ["david","emily","john"] if not get_circuit(a).is_open]
             responses = await call_agents_parallel(agents_avail, q, history)
+
+            david_text = responses.get("david", "") or "David indisponible"
+            emily_text = responses.get("emily", "") or "Emily indisponible"
+            john_text  = responses.get("john",  "") or "John indisponible"
+
+            # Nettoyer le markdown des réponses
+            import re as _re
+            def _clean(text: str) -> str:
+                text = _re.sub(r"#{1,6}\s*", "", text)   # supprimer ##
+                text = _re.sub(r"\*{1,2}(.*?)\*{1,2}", r"\1", text)  # supprimer **bold**
+                text = _re.sub(r"`(.*?)`", r"\1", text)  # supprimer `code`
+                text = _re.sub(r"\n{3,}", "\n\n", text)  # max 2 sauts de ligne
+                return text.strip()
+
             file_name = _pdf_build(
                 "Rapport Global — Direction Générale",
                 [
-                    ("Marketing — David", responses.get("david","")),
-                    ("Support — Emily",   responses.get("emily","")),
+                    ("Marketing — David",  _clean(david_text)),
+                    ("Support — Emily",    _clean(emily_text)),
+                    ("Sales — John",       _clean(john_text)),
                 ]
             )
             return {"success": True, "download_url": f"/reports/{file_name}", "file_name": file_name}
@@ -543,7 +611,7 @@ NE JAMAIS répondre directement si le client veut une ACTION — toujours handof
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
-                        "content": json.dumps(sanitize_for_json(result), ensure_ascii=False)
+                        "content": json.dumps(sanitize_result(sanitize_for_json(result)), ensure_ascii=False)
                     })
             else:
                 final = await client.chat.completions.create(

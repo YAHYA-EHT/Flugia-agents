@@ -119,6 +119,55 @@ def sanitize_for_json(obj):
     elif isinstance(obj, (str, bool, int, float)) or obj is None: return obj
     return str(obj)
 
+# ── Sanitizer contexte LLM ────────────────────────────────────
+_STRIP_FIELDS = {
+    "recording_url", "audio", "audio_url", "audio_base64",
+    "recording", "media_url", "file_url", "file_content",
+    "base64", "binary", "raw_audio",
+}
+_MAX_STR   = 2000   # chars max par champ texte
+_MAX_LIST  = 15     # items max par liste
+_MAX_TOTAL = 80000  # chars max total avant injection LLM
+
+def _clip(obj, _depth=0):
+    """Tronque récursivement un objet pour ne pas exploser le contexte LLM."""
+    if _depth > 6:
+        return "..."
+    if isinstance(obj, dict):
+        return {
+            k: _clip(v, _depth+1)
+            for k, v in obj.items()
+            if k not in _STRIP_FIELDS
+        }
+    if isinstance(obj, list):
+        clipped = [_clip(i, _depth+1) for i in obj[:_MAX_LIST]]
+        if len(obj) > _MAX_LIST:
+            clipped.append(f"... ({len(obj) - _MAX_LIST} éléments supplémentaires non affichés)")
+        return clipped
+    if isinstance(obj, str) and len(obj) > _MAX_STR:
+        return obj[:_MAX_STR] + f"... [tronqué — {len(obj)} chars total]"
+    return obj
+
+def sanitize_result(result: dict) -> dict:
+    """Applique _clip sur le résultat d'un outil avant injection dans le contexte LLM."""
+    clipped = _clip(result)
+    # Vérification finale taille totale
+    import json as _json
+    serialized = _json.dumps(clipped, ensure_ascii=False)
+    if len(serialized) > _MAX_TOTAL:
+        # Tronquer le champ data si trop grand
+        if "data" in clipped:
+            data = clipped["data"]
+            if isinstance(data, list):
+                clipped["data"] = data[:5]
+                clipped["_truncated"] = True
+            elif isinstance(data, dict):
+                clipped["data"] = {k: v for i, (k, v) in enumerate(data.items()) if i < 20}
+                clipped["_truncated"] = True
+    return clipped
+
+
+
 # ── PDF ───────────────────────────────────────────────────────
 def _pdf_styles():
     styles = getSampleStyleSheet()
@@ -233,8 +282,8 @@ def route_model(message: str) -> str:
 
 CONTEXT_PROMPTS = {
     "john":        "",
-    "prospecting": "\n\n[FOCUS PROSPECTING : concentre-toi sur les leads. Appelle get_lead_lists() en priorité.]",
-    "campaigns":   "\n\n[FOCUS CAMPAIGNS : concentre-toi sur les campagnes. Appelle get_campaigns() en priorité.]",
+    "prospecting": "\n\n[FOCUS PROSPECTING : concentre-toi sur les leads. Appelle get_lead_lists() en priorité.]\n[REDIRECTION SECTION : si la demande concerne Marketing/SEO → David, si Support/appels → Emily. 1 phrase max puis handoff_to_agent immédiatement, pas de brief élaboré.]",
+    "campaigns":   "\n\n[REDIRECTION SECTION : si la demande concerne Marketing → David, si Support → Emily. 1 phrase max puis handoff_to_agent immédiatement.]\n[FOCUS CAMPAIGNS : concentre-toi sur les campagnes. Appelle get_campaigns() en priorité.]",
 }
 
 # ── Tools ─────────────────────────────────────────────────────
@@ -504,7 +553,7 @@ async def chat(req: ChatRequest):
 
                     await asyncio.sleep(0)
                     messages.append({"role": "tool", "tool_call_id": tc.id,
-                                      "content": json.dumps(sanitize_for_json(result), ensure_ascii=False)})
+                                      "content": json.dumps(sanitize_result(sanitize_for_json(result)), ensure_ascii=False)})
             else:
                 final = await client.chat.completions.create(
                     model=MODEL_SONNET, messages=messages, max_tokens=1024, stream=True)
