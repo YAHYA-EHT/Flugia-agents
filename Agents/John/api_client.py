@@ -5,7 +5,9 @@ Garde le mode mock (contrairement à EmilyApiClient) pour permettre les démos
 et tests hors-ligne sans dépendre de l'API réelle.
 """
 import os
+import uuid
 import httpx
+from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -73,6 +75,24 @@ MOCK_CAMPAIGN_STATS = {
     "total_emails_sent": 117,
     "total_replies": 9,
 }
+
+MOCK_SEARCH_RESULTS = [
+    {
+        "person_id": "apollo_mock_001", "first_name": "Sophie", "last_name": "Martin",
+        "title": "VP Sales", "company_name": "TechFlow SA", "industry": "SaaS",
+        "location": "Lyon, France", "company_size": 85, "email_status": "verified",
+    },
+    {
+        "person_id": "apollo_mock_002", "first_name": "Karim", "last_name": "Benali",
+        "title": "Directeur Commercial", "company_name": "Atlas Digital", "industry": "Marketing",
+        "location": "Casablanca, Maroc", "company_size": 40, "email_status": "verified",
+    },
+    {
+        "person_id": "apollo_mock_003", "first_name": "Laura", "last_name": "Fontaine",
+        "title": "Head of Growth", "company_name": "NovaCommerce", "industry": "E-commerce",
+        "location": "Bruxelles, Belgique", "company_size": 120, "email_status": "verified",
+    },
+]
 
 
 class JohnApiClient:
@@ -205,4 +225,107 @@ class JohnApiClient:
                 "data": {"campaign": camp, "send": {"sent_count": 3, "skipped_count": 0, "error_count": 0} if status == "active" else None}
             }
         return await self._patch(f"/api/campaigns/{campaign_id}/status", body={"status": status})
-    
+
+    # ════════════════════════════════════════════════════════
+    # PROSPECTING — recherche, listes, import (nouveaux)
+    # ════════════════════════════════════════════════════════
+
+    async def search_prospects(self, organization_industries: list = None, person_titles: list = None,
+                                person_locations: list = None, organization_locations: list = None,
+                                organization_num_employees_ranges: list = None, q_keywords: str = None,
+                                per_page: int = 10) -> dict:
+        if MODE == "mock":
+            return {"success": True, "data": MOCK_SEARCH_RESULTS[:per_page]}
+        body = {"per_page": per_page}
+        if organization_industries: body["organization_industries"] = organization_industries
+        if person_titles: body["person_titles"] = person_titles
+        if person_locations: body["person_locations"] = person_locations
+        if organization_locations: body["organization_locations"] = organization_locations
+        if organization_num_employees_ranges: body["organization_num_employees_ranges"] = organization_num_employees_ranges
+        if q_keywords: body["q_keywords"] = q_keywords
+        return await self._post("/api/prospecting/people-search", body=body)
+
+    async def create_lead_list(self, name: str) -> dict:
+        if MODE == "mock":
+            new_id = max([l["id"] for l in MOCK_LEAD_LISTS], default=0) + 1
+            new_list = {"id": new_id, "name": name, "leads_count": 0,
+                        "created_at": datetime.now().isoformat()}
+            MOCK_LEAD_LISTS.append(new_list)
+            return {"success": True, "data": new_list}
+        return await self._post("/api/prospecting/lists", body={"name": name})
+
+    async def add_leads_to_list(self, list_id: int, person_ids: list) -> dict:
+        if MODE == "mock":
+            lst = next((l for l in MOCK_LEAD_LISTS if l["id"] == list_id), None)
+            if not lst:
+                return {"success": False, "error": "Liste introuvable"}
+            lst["leads_count"] = lst.get("leads_count", 0) + len(person_ids)
+            return {"success": True, "message": f"{len(person_ids)} lead(s) ajouté(s) à '{lst['name']}'."}
+        return await self._post(f"/api/prospecting/lists/{list_id}/leads", body={"person_ids": person_ids})
+
+    async def import_leads(self, leads: list) -> dict:
+        if MODE == "mock":
+            return {"success": True, "data": {"imported": len(leads), "updated": 0, "skipped": []}}
+        return await self._post("/api/prospecting/leads/import", body={"leads": leads})
+
+    # ════════════════════════════════════════════════════════
+    # CAMPAIGNS — création, contacts, conversations (nouveaux)
+    # ════════════════════════════════════════════════════════
+
+    async def create_campaign(self, name: str, mode: str, objective: str, offer: str, cta: str,
+                               tone: str = None, language: str = None) -> dict:
+        if MODE == "mock":
+            new_id = max([c["id"] for c in MOCK_CAMPAIGNS], default=0) + 1
+            new_camp = {
+                "id": new_id, "name": name, "mode": mode, "status": "draft",
+                "sender_mailbox_mode": "single", "sequence_mode": "hyper_personalized",
+                "created_at": datetime.now().isoformat(),
+                "statistics": {"total_contacts": 0, "total_emails_sent": 0},
+            }
+            MOCK_CAMPAIGNS.append(new_camp)
+            return {"success": True, "data": new_camp,
+                    "message": f"Campagne '{name}' créée en brouillon (draft)."}
+        strategy = {"objective": objective, "offer": offer, "cta": cta}
+        if tone: strategy["tone"] = tone
+        if language: strategy["language"] = language
+        return await self._post("/api/campaigns", body={"name": name, "mode": mode, "strategy": strategy})
+
+    async def add_contacts_to_campaign(self, campaign_id: int, person_ids: list) -> dict:
+        if MODE == "mock":
+            camp = next((c for c in MOCK_CAMPAIGNS if c["id"] == campaign_id), None)
+            if not camp:
+                return {"success": False, "error": "Campagne introuvable"}
+            camp["statistics"]["total_contacts"] = camp["statistics"].get("total_contacts", 0) + len(person_ids)
+            return {"success": True, "message": f"{len(person_ids)} contact(s) ajouté(s) à '{camp['name']}'."}
+        return await self._post(f"/api/campaigns/{campaign_id}/contacts/from-leads", body={"person_ids": person_ids})
+
+    async def check_campaign_replies(self, campaign_id: int) -> dict:
+        if MODE == "mock":
+            camp = next((c for c in MOCK_CAMPAIGNS if c["id"] == campaign_id), None)
+            if not camp:
+                return {"success": False, "error": "Campagne introuvable"}
+            return {"success": True, "data": {
+                "mailbox": "sales@flugia.com", "checked_count": 5, "replied_count": 1, "error_count": 0
+            }}
+        return await self._post(f"/api/campaigns/{campaign_id}/check-replies")
+
+    async def get_contact_conversation(self, campaign_id: int, contact_id: int) -> dict:
+        if MODE == "mock":
+            return {"success": True, "data": {
+                "mailbox": "sales@flugia.com",
+                "contact": {"id": contact_id, "name": "Alexis Descampe", "email": "alexis@farmstore.be",
+                           "sequence_status": "replied"},
+                "messages": [
+                    {"direction": "outbound", "author": "John", "text": "Bonjour Alexis, ...",
+                     "sent_at": datetime.now().isoformat()},
+                    {"direction": "inbound", "author": "Alexis Descampe", "text": "Merci, ça m'intéresse !",
+                     "sent_at": datetime.now().isoformat()},
+                ],
+            }}
+        return await self._get(f"/api/campaigns/{campaign_id}/contacts/{contact_id}/conversation")
+
+    async def reply_to_contact(self, campaign_id: int, contact_id: int, body: str) -> dict:
+        if MODE == "mock":
+            return {"success": True, "message": "Réponse envoyée (mock).",
+                    "data": {"to": "contact@example.com", "sent_at": datetime.now().isoformat()}}
+        return await self._post(f"/api/campaigns/{campaign_id}/contacts/{contact_id}/reply", body={"body": body})
