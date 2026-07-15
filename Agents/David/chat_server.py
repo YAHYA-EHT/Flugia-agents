@@ -358,6 +358,7 @@ def send_email_multi_attachments(to_email: str, subject: str, body: str, file_na
 # Import flexible — supporte nouvelle structure agents/david/mcp_servers/
 api = None
 seo_api = None
+linkedin_api = None
 try:
     from mcp_servers.e_reputation import api_client as api
 except ImportError:
@@ -367,6 +368,10 @@ except ImportError:
         pass
 try:
     from mcp_servers.seo import api_client as seo_api
+except ImportError:
+    pass
+try:
+    from mcp_servers.linkedin import api_client as linkedin_api
 except ImportError:
     pass
 
@@ -494,9 +499,9 @@ TOOLS_BY_CONTEXT = {
     "david": None,  # None = tous les outils
     # Tous les contextes Marketing ont accès à tous les outils Marketing
     # La distinction contextuelle sert uniquement au prompt — pas aux outils
-    "e_reputation": ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "n8n_publish_linkedin_post", "n8n_schedule_linkedin_posts", "send_email"],
-    "seo":          ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "n8n_publish_linkedin_post", "n8n_schedule_linkedin_posts", "send_email"],
-    "linkedin":     ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "n8n_publish_linkedin_post", "n8n_schedule_linkedin_posts", "send_email"],
+    "e_reputation": ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "get_linkedin_settings", "get_style_guide", "get_linkedin_posts", "get_linkedin_post", "get_content_ideas", "get_content_idea_session", "get_kpi_analyses", "get_kpi_analysis", "n8n_publish_linkedin_post", "n8n_schedule_linkedin_posts", "send_email"],
+    "seo":          ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "get_linkedin_settings", "get_style_guide", "get_linkedin_posts", "get_linkedin_post", "get_content_ideas", "get_content_idea_session", "get_kpi_analyses", "get_kpi_analysis", "n8n_publish_linkedin_post", "n8n_schedule_linkedin_posts", "send_email"],
+    "linkedin":     ["fetch_reviews", "get_statistics", "get_negative_reviews", "get_negative_analysis", "get_negative_analysis_stats", "get_status", "get_notifications", "get_notifications_activity", "mark_notification_read", "n8n_generate_review_response", "n8n_analyze_reviews", "n8n_collect_reviews", "get_blog_posts", "get_blog_post", "get_title_suggestions", "get_seo_audits", "get_seo_audit", "get_seo_audit_status", "get_seo_settings", "n8n_generate_blog_post", "n8n_generate_seo_audit", "n8n_generate_title_suggestions", "n8n_regenerate_blog_post", "update_blog_post", "reject_title_suggestion", "get_linkedin_settings", "get_style_guide", "get_linkedin_posts", "get_linkedin_post", "get_content_ideas", "get_content_idea_session", "get_kpi_analyses", "get_kpi_analysis", "n8n_publish_linkedin_post", "n8n_schedule_linkedin_posts", "send_email"],
 }
 
 def get_tools_for_context(context: str) -> list:
@@ -942,6 +947,82 @@ TOOLS = [
                     "suggestion_id": {"type": "integer", "description": "ID de la suggestion à rejeter"}
                 },
                 "required": ["suggestion_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_linkedin_settings",
+            "description": "Paramètres d'onboarding LinkedIn de la société (URL de page, pays, langue, préférences de style).",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_style_guide",
+            "description": "Guide de style d'écriture LinkedIn généré pour la société (ton, thèmes, à éviter).",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_linkedin_posts",
+            "description": "Liste tous les posts LinkedIn (générés, publiés, planifiés). Appeler pour toute question sur les posts existants.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_linkedin_post",
+            "description": "Détail d'un post LinkedIn spécifique.",
+            "parameters": {
+                "type": "object",
+                "properties": {"post_id": {"type": "integer", "description": "ID du post LinkedIn"}},
+                "required": ["post_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_content_ideas",
+            "description": "Liste toutes les sessions de scraping de contenu et leurs idées de posts générées.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_content_idea_session",
+            "description": "Détail d'une session de scraping de contenu spécifique (idées générées pour cette session).",
+            "parameters": {
+                "type": "object",
+                "properties": {"session_id": {"type": "string", "description": "UUID de la session de scraping"}},
+                "required": ["session_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_kpi_analyses",
+            "description": "Liste tous les rapports d'analyse KPI LinkedIn déjà générés (historique).",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_kpi_analysis",
+            "description": "Détail d'un rapport d'analyse KPI LinkedIn (impressions, taux d'engagement, followers gagnés).",
+            "parameters": {
+                "type": "object",
+                "properties": {"analysis_id": {"type": "integer", "description": "ID du rapport d'analyse"}},
+                "required": ["analysis_id"]
             }
         }
     },
@@ -1802,6 +1883,47 @@ async def execute_tool(name: str, args: dict) -> dict:
                 )
             else:
                 result = {"error": "Module SEO non disponible"}
+
+        elif name == "get_linkedin_settings":
+            if linkedin_api:
+                result = await linkedin_api.get_linkedin_settings()
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
+        elif name == "get_style_guide":
+            if linkedin_api:
+                result = await linkedin_api.get_style_guide()
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
+        elif name == "get_linkedin_posts":
+            if linkedin_api:
+                result = await linkedin_api.get_linkedin_posts()
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
+        elif name == "get_linkedin_post":
+            if linkedin_api:
+                result = await linkedin_api.get_linkedin_post(post_id=clean["post_id"])
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
+        elif name == "get_content_ideas":
+            if linkedin_api:
+                result = await linkedin_api.get_content_ideas()
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
+        elif name == "get_content_idea_session":
+            if linkedin_api:
+                result = await linkedin_api.get_content_idea_session(session_id=clean["session_id"])
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
+        elif name == "get_kpi_analyses":
+            if linkedin_api:
+                result = await linkedin_api.get_kpi_analyses()
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
+        elif name == "get_kpi_analysis":
+            if linkedin_api:
+                result = await linkedin_api.get_kpi_analysis(analysis_id=clean["analysis_id"])
+            else:
+                result = {"error": "Module LinkedIn non disponible"}
 
         elif name == "handoff_to_agent":
             agent           = clean.get("agent", "emily")
