@@ -84,6 +84,70 @@ async def _get(path: str, params: dict = None) -> dict:
         return r.json()
 
 
+async def _post(path: str, body: dict = None) -> dict:
+    """POST avec auto-refresh sur 401."""
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{BASE_URL}{path}", headers=_get_headers(), json=body or {}, timeout=60
+        )
+        if r.status_code == 401:
+            print(f"[AUTH] Token expiré sur POST {path} — tentative de renouvellement...")
+            refreshed = await _refresh_token()
+            if refreshed:
+                r = await client.post(
+                    f"{BASE_URL}{path}", headers=_get_headers(), json=body or {}, timeout=60
+                )
+            else:
+                return {"success": False, "error": "Token expiré et renouvellement impossible — vérifie FLUGIA_EMAIL et FLUGIA_PASSWORD dans .env"}
+        # 422 = erreur de validation (pas un vrai crash) — retourner la réponse
+        if r.status_code in [400, 422, 429]:
+            return r.json()
+        r.raise_for_status()
+        return r.json()
+
+
+async def _patch(path: str, body: dict = None) -> dict:
+    """PATCH avec auto-refresh sur 401."""
+    async with httpx.AsyncClient() as client:
+        r = await client.patch(
+            f"{BASE_URL}{path}", headers=_get_headers(), json=body or {}, timeout=60
+        )
+        if r.status_code == 401:
+            print(f"[AUTH] Token expiré sur PATCH {path} — tentative de renouvellement...")
+            refreshed = await _refresh_token()
+            if refreshed:
+                r = await client.patch(
+                    f"{BASE_URL}{path}", headers=_get_headers(), json=body or {}, timeout=60
+                )
+            else:
+                return {"success": False, "error": "Token expiré et renouvellement impossible — vérifie FLUGIA_EMAIL et FLUGIA_PASSWORD dans .env"}
+        if r.status_code in [400, 422, 429]:
+            return r.json()
+        r.raise_for_status()
+        return r.json()
+
+
+async def _delete(path: str) -> dict:
+    """DELETE avec auto-refresh sur 401."""
+    async with httpx.AsyncClient() as client:
+        r = await client.delete(
+            f"{BASE_URL}{path}", headers=_get_headers(), timeout=30
+        )
+        if r.status_code == 401:
+            print(f"[AUTH] Token expiré sur DELETE {path} — tentative de renouvellement...")
+            refreshed = await _refresh_token()
+            if refreshed:
+                r = await client.delete(
+                    f"{BASE_URL}{path}", headers=_get_headers(), timeout=30
+                )
+            else:
+                return {"success": False, "error": "Token expiré et renouvellement impossible — vérifie FLUGIA_EMAIL et FLUGIA_PASSWORD dans .env"}
+        if r.status_code in [400, 422, 429]:
+            return r.json()
+        r.raise_for_status()
+        return r.json()
+
+
 # ── MOCK DATA ────────────────────────────────────────────────
 
 MOCK_SETTINGS = {
@@ -127,6 +191,9 @@ MOCK_CONTENT_SESSIONS = [
         ],
     },
 ]
+
+import uuid as _uuid
+from datetime import datetime as _datetime
 
 
 # ── FONCTIONS ─────────────────────────────────────────────────
@@ -197,3 +264,120 @@ async def get_kpi_analysis(analysis_id: int) -> dict:
             "top_post_id": 11,
         }}
     return await _get(f"/api/linkedin/analysis/{analysis_id}")
+
+
+# ── ACTIONS (écriture) ──────────────────────────────────────────
+
+async def trigger_content_scrape(sector: str, number_of_posts: int, language: str,
+                                  client_preferences: str = None) -> dict:
+    """Lance une session de scraping de contenu LinkedIn pour trouver des idées de posts dans le secteur."""
+    if MODE == "mock":
+        session_id = str(_uuid.uuid4())
+        return {"success": True, "data": {"session_id": session_id, "status": "processing"},
+                "message": f"Scraping lancé pour le secteur '{sector}' — {number_of_posts} idées en préparation."}
+    body = {"sector": sector, "number_of_posts": number_of_posts, "language": language}
+    if client_preferences:
+        body["client_preferences"] = client_preferences
+    return await _post("/api/linkedin/content/scrape", body=body)
+
+
+async def generate_posts_from_ideas(idea_ids: list) -> dict:
+    """Génère des posts LinkedIn personnalisés à partir d'idées déjà scrapées."""
+    if MODE == "mock":
+        new_posts = []
+        for iid in idea_ids:
+            new_id = max([p["id"] for p in MOCK_POSTS], default=0) + 1
+            post = {"id": new_id, "personalized_post": f"[Post généré à partir de l'idée #{iid}]",
+                    "status": "completed", "created_at": _datetime.now().isoformat(), "scheduled_at": None}
+            MOCK_POSTS.append(post)
+            new_posts.append(post)
+        return {"success": True, "data": new_posts,
+                "message": f"{len(new_posts)} post(s) généré(s) à partir des idées sélectionnées."}
+    return await _post("/api/linkedin/posts/generate", body={"idea_ids": idea_ids})
+
+
+async def generate_manual_post(titre: str, description: str, language: str,
+                                hook_ouverture: str = None, structure_suggeree: str = None,
+                                cta: str = None, hashtags: str = None) -> dict:
+    """Crée un post LinkedIn à partir d'un sujet fourni manuellement, sans passer par le scraper."""
+    if MODE == "mock":
+        new_id = max([p["id"] for p in MOCK_POSTS], default=0) + 1
+        post = {"id": new_id, "personalized_post": f"{hook_ouverture or titre}\n\n{description}",
+                "status": "completed", "created_at": _datetime.now().isoformat(), "scheduled_at": None}
+        MOCK_POSTS.append(post)
+        return {"success": True, "data": post, "message": f"Post '{titre}' généré."}
+    body = {"titre": titre, "description": description, "language": language}
+    if hook_ouverture: body["hook_ouverture"] = hook_ouverture
+    if structure_suggeree: body["structure_suggeree"] = structure_suggeree
+    if cta: body["cta"] = cta
+    if hashtags: body["hashtags"] = hashtags
+    return await _post("/api/linkedin/posts/generate-manual", body=body)
+
+
+async def edit_linkedin_post(post_id: int, personalized_post: str = None,
+                              generated_image_url: str = None) -> dict:
+    """Modifie le contenu texte ou l'image d'un post LinkedIn existant."""
+    if MODE == "mock":
+        post = next((p for p in MOCK_POSTS if p["id"] == post_id), None)
+        if not post:
+            return {"success": False, "error": "Post introuvable"}
+        if personalized_post:
+            post["personalized_post"] = personalized_post
+        return {"success": True, "data": post, "message": "Post mis à jour."}
+    body = {}
+    if personalized_post: body["personalized_post"] = personalized_post
+    if generated_image_url: body["generated_image_url"] = generated_image_url
+    return await _patch(f"/api/linkedin/posts/{post_id}", body=body)
+
+
+async def regenerate_linkedin_post(post_id: int, feedback: str, previous_post: str) -> dict:
+    """Régénère un post LinkedIn en tenant compte d'un retour du client."""
+    if MODE == "mock":
+        post = next((p for p in MOCK_POSTS if p["id"] == post_id), None)
+        if not post:
+            return {"success": False, "error": "Post introuvable"}
+        post["personalized_post"] = f"[Régénéré suite au retour '{feedback}'] {previous_post[:80]}..."
+        return {"success": True, "data": post, "message": "Post régénéré."}
+    return await _post(f"/api/linkedin/posts/{post_id}/regenerate",
+                       body={"feedback": feedback, "previous_post": previous_post})
+
+
+async def publish_linkedin_post(post_id: int) -> dict:
+    """Publie immédiatement un post LinkedIn complété. Action irréversible — confirmer avant d'appeler."""
+    if MODE == "mock":
+        post = next((p for p in MOCK_POSTS if p["id"] == post_id), None)
+        if not post:
+            return {"success": False, "error": "Post introuvable"}
+        if post["status"] not in ("completed", "scheduled"):
+            return {"success": False, "error": f"Le post est en statut '{post['status']}' — seuls les posts complétés ou planifiés peuvent être publiés."}
+        post["status"] = "published"
+        return {"success": True, "data": post, "message": "Post publié sur LinkedIn."}
+    return await _post(f"/api/linkedin/posts/{post_id}/publish")
+
+
+async def schedule_linkedin_post(post_id: int, scheduled_at: str) -> dict:
+    """Planifie la publication future d'un post LinkedIn complété. Confirmer la date avant d'appeler."""
+    if MODE == "mock":
+        post = next((p for p in MOCK_POSTS if p["id"] == post_id), None)
+        if not post:
+            return {"success": False, "error": "Post introuvable"}
+        if post["status"] != "completed":
+            return {"success": False, "error": f"Le post est en statut '{post['status']}' — seuls les posts complétés peuvent être planifiés."}
+        post["status"] = "scheduled"
+        post["scheduled_at"] = scheduled_at
+        return {"success": True, "data": post, "message": f"Post planifié pour le {scheduled_at}."}
+    return await _post(f"/api/linkedin/posts/{post_id}/schedule", body={"scheduled_at": scheduled_at})
+
+
+async def cancel_scheduled_post(post_id: int) -> dict:
+    """Annule la planification d'un post LinkedIn — repasse en statut complété, non publié."""
+    if MODE == "mock":
+        post = next((p for p in MOCK_POSTS if p["id"] == post_id), None)
+        if not post:
+            return {"success": False, "error": "Post introuvable"}
+        if post["status"] != "scheduled":
+            return {"success": False, "error": "Ce post n'est pas planifié."}
+        post["status"] = "completed"
+        post["scheduled_at"] = None
+        return {"success": True, "data": post, "message": "Planification annulée."}
+    return await _delete(f"/api/linkedin/posts/{post_id}/schedule")
