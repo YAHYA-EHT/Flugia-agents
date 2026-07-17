@@ -1,0 +1,29 @@
+site_name: Flugia — Documentation Technique
+site_description: Plateforme multi-agents IA — Marketing, Sales, Support
+
+theme:
+  name: material
+  palette:
+    primary: cyan
+    accent: blue
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - search.highlight
+
+nav:
+  - Accueil: index.md
+  - Architecture: architecture.md
+  - Installation: installation.md
+  - Agents:
+    - David (Marketing): david.md
+    - Emily (Support): emily.md
+    - John (Sales): john.md
+    - Roger (Global): roger.md
+  - Système Handoff: handoff.md
+  - Contribuer: contributing.md
+
+markdown_extensions:
+  - tables
+  - fenced_code
+  - admonition
