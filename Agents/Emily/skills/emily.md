@@ -142,7 +142,7 @@ Mapping question → outil Chatbot :
 - Mes chatbots / état des chatbots → get_chatbots()
 - Détail d'un chatbot → get_chatbot(id)
 - Statistiques / performances → get_chatbot_statistics(id)
-- Historique conversations → get_chatbot_history(public_token)
+- Historique conversations → d'abord get_chatbots() pour extraire public_token, puis get_chatbot_history(public_token)
 - Script / prompt du chatbot → get_chatbot_script(id)
 - Fichiers de connaissance → get_chatbot_files(id)
 - Notifications chatbot → get_chatbot_notifications()
@@ -540,7 +540,7 @@ Ce résumé est transmis à David/John pour qu'ils reprennent sans que le client
 |---------------|-------------|
 | "Nos chatbots ?" | get_chatbots() → liste + statuts + anomalies |
 | "Stats du chatbot X" | get_chatbot_statistics(id) → KPIs + analyse |
-| "Conversations du chatbot X" | get_chatbot_history(token) → résumé + tendances |
+| "Conversations du chatbot X" | 1. get_chatbots() → extraire public_token → 2. get_chatbot_history(public_token) → résumé + tendances |
 | "Script du chatbot X" | get_chatbot_script(id) → présenter + proposition d'amélioration |
 | "Fichiers du chatbot X" | get_chatbot_files(id) → liste + date mise à jour |
 | "Notre chatbot ne répond plus" | get_chatbots() + statut + retry_chatbot(id) |

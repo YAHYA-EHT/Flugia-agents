@@ -140,8 +140,8 @@ function Bubble({ msg }: { msg: Message }) {
       <div className={`flex max-w-[78%] flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
         {msg.tools && msg.tools.length > 0 && (
           <div className="flex flex-wrap gap-1 mb-1">
-            {msg.tools.map(t => (
-              <span key={t} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1" style={{ background: "#4cc9f015", color: "#4cc9f0", ringColor: "#4cc9f030" }}>
+            {msg.tools.map((t, i) => (
+              <span key={`${t}-${i}`} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1" style={{ background: "#4cc9f015", color: "#4cc9f0", ringColor: "#4cc9f030" }}>
                 <span className="h-1 w-1 rounded-full" style={{ background: "#4cc9f0" }} />{t}
               </span>
             ))}
